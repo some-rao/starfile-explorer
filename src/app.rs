@@ -707,6 +707,14 @@ fn apply_theme(ctx: &egui::Context, accent: Color32, theme: u8) {
             w.noninteractive.fg_stroke.color = c.label;
         });
     }
+    // Pencere çerçevesi: yuvarlatılmış köşeler ve koyu başlık
+    let dark_frame = match (scheme::get(theme), theme) {
+        (Some(c), _) => c.dark,
+        (None, 1) => false,
+        (None, 2) => true,
+        _ => ctx.style().visuals.dark_mode,
+    };
+    crate::system::apply_backdrop(dark_frame);
 }
 
 /// Sistem metin ölçeğini uygular. Tüm arayüz (yazı, satır, simge, boşluk) birlikte büyür;
@@ -4491,6 +4499,8 @@ impl eframe::App for App {
                 if let RawWindowHandle::Win32(w) = h.as_raw() {
                     let hwnd = w.hwnd.get();
                     self.hwnd = Some(hwnd);
+                    crate::system::set_hwnd(hwnd);
+                    crate::system::apply_backdrop(ctx.style().visuals.dark_mode);
                     shell::install_subclass(hwnd);
                     // eframe pencereyi ilk kareden sonra gösterir; o an DWM henüz
                     // GL yüzeyini almadığından bir kare beyaz parlar. Hazır olana dek gizle.

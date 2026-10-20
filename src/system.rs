@@ -4,11 +4,17 @@
 //! `WM_SETTINGCHANGE` / `WM_THEMECHANGED` geldiğinde `mark_dirty()` çağrılır; `App::update`
 //! bir sonraki karede `take_dirty()` görüp temayı ve ölçeği yeniden uygular.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::OnceLock;
 
 static DIRTY: AtomicBool = AtomicBool::new(false);
 static CTX: OnceLock<egui::Context> = OnceLock::new();
+static HWND: AtomicIsize = AtomicIsize::new(0);
+
+/// Ana pencere tutamacını kaydet; DWM çağrıları pencere oluştuktan sonra yapılabilir.
+pub fn set_hwnd(hwnd: isize) {
+    HWND.store(hwnd, Ordering::Relaxed);
+}
 
 /// Ayar değişti; bir sonraki karede yeniden uygulanmalı.
 pub fn mark_dirty() {
@@ -35,7 +41,13 @@ pub fn repaint() {
 #[cfg(windows)]
 mod imp {
     use std::ffi::c_void;
+    use std::sync::atomic::Ordering;
 
+    use windows::Win32::Foundation::{BOOL, HWND};
+    use windows::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
+        DWMWCP_ROUND,
+    };
     use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
     use windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -110,6 +122,35 @@ mod imp {
             let _ = SetCurrentProcessExplicitAppUserModelID(id.as_ptr());
         }
     }
+
+    /// Yuvarlatılmış köşeler ve koyu pencere çerçevesi.
+    ///
+    /// `DWMWA_USE_IMMERSIVE_DARK_MODE` özel başlık çubuğu kullanan pencerelerde ince
+    /// çerçeveyi/gölgeyi koyu moda uyarlar; `DWMWA_WINDOW_CORNER_PREFERENCE` Windows 11'in
+    /// yuvarlatılmış köşelerini etkinleştirir. Windows 10'da ikinci çağrı hata verir, zararsız.
+    pub fn apply_backdrop(dark: bool) {
+        let hwnd = super::HWND.load(Ordering::Relaxed);
+        if hwnd == 0 {
+            return;
+        }
+        let hwnd = HWND(hwnd as *mut c_void);
+        unsafe {
+            let dark = BOOL::from(dark);
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_USE_IMMERSIVE_DARK_MODE,
+                &dark as *const BOOL as *const c_void,
+                std::mem::size_of::<BOOL>() as u32,
+            );
+            let corner = DWMWCP_ROUND;
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                &corner as *const _ as *const c_void,
+                std::mem::size_of_val(&corner) as u32,
+            );
+        }
+    }
 }
 
 #[cfg(not(windows))]
@@ -125,6 +166,8 @@ mod imp {
     pub fn apply_dpi_awareness() {}
 
     pub fn set_app_id() {}
+
+    pub fn apply_backdrop(_dark: bool) {}
 }
 
 pub use imp::*;
