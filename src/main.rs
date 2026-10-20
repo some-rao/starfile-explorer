@@ -11,6 +11,7 @@ mod properties;
 mod scheme;
 #[cfg(feature = "screenshot")]
 mod screenshot;
+mod system;
 mod tab;
 mod update;
 #[cfg_attr(not(windows), path = "shell_unix.rs")]
@@ -25,7 +26,16 @@ pub const APP_NAME: &str = "Swift Explorer";
 pub const APP_ID: &str = "io.github.misutesu_desu.SwiftExplorer";
 
 fn main() -> eframe::Result<()> {
+    // Pencere oluşmadan: monitör başına DPI ve görev çubuğu kimliği
+    system::apply_dpi_awareness();
+    system::set_app_id();
+
     let arg = std::env::args().nth(1);
+    // Kaldırıcı, dosyalar silinmeden önce kayıt defteri temizliği için çağırır
+    if arg.as_deref() == Some("--uninstall-cleanup") {
+        app::uninstall_cleanup();
+        return Ok(());
+    }
     let after_update = arg.as_deref() == Some(update::AFTER_UPDATE_ARG);
     let hidden = after_update || arg.as_deref() == Some(win::BACKGROUND_ARG);
     if after_update {

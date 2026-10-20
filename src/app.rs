@@ -385,15 +385,28 @@ fn setup_fonts(ctx: &egui::Context) {
         fonts.families.get_mut(&egui::FontFamily::Proportional).unwrap().insert(0, "system".into());
     }
     #[cfg(windows)]
-    for (name, file, front) in [("segoe", "segoeui.ttf", true), ("segoe_sym", "seguisym.ttf", false)] {
-        if let Ok(bytes) = std::fs::read(format!("C:\\Windows\\Fonts\\{file}")) {
-            fonts.font_data.insert(name.into(), Arc::new(egui::FontData::from_owned(bytes)));
-            let fam = fonts.families.get_mut(&egui::FontFamily::Proportional).unwrap();
-            if front {
-                fam.insert(0, name.into());
-            } else {
-                fam.push(name.into());
-            }
+    {
+        // Windows 11 Explorer'ın kullandığı yazı tipi: Segoe UI Variable (değişken ağırlıklı).
+        // Windows 10'da bulunmaz; Segoe UI'a düşülür.
+        let ui = ["SegUIVar.ttf", "segoeui.ttf"]
+            .into_iter()
+            .find_map(|file| std::fs::read(format!("C:\\Windows\\Fonts\\{file}")).ok());
+        if let Some(bytes) = ui {
+            fonts.font_data.insert("system_ui".into(), Arc::new(egui::FontData::from_owned(bytes)));
+            fonts
+                .families
+                .get_mut(&egui::FontFamily::Proportional)
+                .unwrap()
+                .insert(0, "system_ui".into());
+        }
+        // Simge ve sembol glifleri için yedek
+        if let Ok(bytes) = std::fs::read("C:\\Windows\\Fonts\\seguisym.ttf") {
+            fonts.font_data.insert("segoe_sym".into(), Arc::new(egui::FontData::from_owned(bytes)));
+            fonts
+                .families
+                .get_mut(&egui::FontFamily::Proportional)
+                .unwrap()
+                .push("segoe_sym".into());
         }
     }
     // İkonlar: önce egui'nin emoji/ikon fontları, böylece Segoe UI'ın tek renkli glifleri araya girmez
@@ -603,9 +616,14 @@ fn apply_theme(ctx: &egui::Context, accent: Color32, theme: u8) {
         ctx.style_mut_of(t, |s| {
             s.interaction.selectable_labels = false;
             s.interaction.tooltip_delay = 0.45;
-            // Menüler, açılır listeler ve klavyeyle kaydırma beklemeden tepki versin
-            s.animation_time = 0.0;
-            s.scroll_animation = egui::style::ScrollAnimation::none();
+            // Windows'ta "Animasyonlar" kapalıysa anında tepki ver; açıksa yumuşak geçiş
+            let anim = crate::system::animations();
+            s.animation_time = if anim { 0.12 } else { 0.0 };
+            s.scroll_animation = if anim {
+                egui::style::ScrollAnimation::duration(0.18)
+            } else {
+                egui::style::ScrollAnimation::none()
+            };
             s.spacing.item_spacing = egui::vec2(6.0, 4.0);
             s.spacing.button_padding = egui::vec2(8.0, 4.0);
             s.spacing.interact_size.y = 26.0;
@@ -658,6 +676,22 @@ fn apply_theme(ctx: &egui::Context, accent: Color32, theme: u8) {
             w.noninteractive.fg_stroke.color = c.label;
         });
     }
+}
+
+/// Sistem metin ölçeğini uygular. Tüm arayüz (yazı, satır, simge, boşluk) birlikte büyür;
+/// böylece 225 %'te bile hiçbir metin kırpılmaz.
+fn apply_scale(ctx: &egui::Context) {
+    ctx.set_zoom_factor(crate::system::text_scale().clamp(1.0, 2.25));
+}
+
+/// Kaldırma öncesi: otomatik başlatmayı ve varsayılan dosya gezgini kayıtlarını geri al.
+/// Inno Setup `--uninstall-cleanup` ile dosyalar silinmeden önce çağırır.
+pub fn uninstall_cleanup() {
+    let cfg = load_config();
+    if win::is_default_file_manager() {
+        win::set_default_file_manager(false, cfg.previous_folder_app.as_deref());
+    }
+    win::set_autostart(false);
 }
 
 /// egui'nin kendi çizdiği yüzeyler: menüler, düğmeler, metin kutuları
@@ -1077,6 +1111,8 @@ impl App {
         apply_lang(cfg.lang);
         load_cjk_fonts(&ctx);
         apply_theme(&ctx, accent, cfg.theme);
+        apply_scale(&ctx);
+        crate::system::set_ctx(ctx.clone());
 
         let (paths, active) = startup_tabs(&cfg, start);
         let (subdirs_tx, subdirs_rx) = std::sync::mpsc::channel();
@@ -4317,6 +4353,14 @@ impl eframe::App for App {
                     shell::set_cloak(hwnd, true);
                 }
             }
+        }
+
+        // Metin boyutu, vurgu rengi veya animasyon ayarı değiştiyse beklemeden uygula
+        if crate::system::take_dirty() {
+            self.accent = theme_accent(self.theme);
+            apply_theme(ctx, self.accent, self.theme);
+            apply_scale(ctx);
+            ctx.request_repaint();
         }
 
         if let Some(start) = win::take_reopen() {

@@ -32,6 +32,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreatePopupMenu, DestroyMenu, GetAncestor, GetCursorPos, GetWindowRect, IsZoomed, WindowFromPoint, GA_ROOT, TrackPopupMenuEx, HTBOTTOM, HTBOTTOMLEFT,
     HTBOTTOMRIGHT, HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, SW_SHOWNORMAL, TPM_RETURNCMD,
     TPM_RIGHTBUTTON, WM_NCHITTEST, WM_DRAWITEM, WM_INITMENUPOPUP, WM_MEASUREITEM, WM_MENUCHAR, WM_MENUSELECT,
+    WM_SETTINGCHANGE, WM_THEMECHANGED,
     CallNextHookEx, SetWindowsHookExW, UnhookWindowsHookEx, CBT_CREATEWNDW, HCBT_CREATEWND, HHOOK, WH_CBT, WS_CHILD,
     WM_CREATE, WM_SHOWWINDOW,
 };
@@ -277,6 +278,11 @@ pub fn install_subclass(hwnd: isize) {
 }
 
 unsafe extern "system" fn subclass_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, _id: usize, _data: usize) -> LRESULT {
+    // Metin ölçeği, vurgu rengi, animasyonlar veya tema değişti
+    if msg == WM_SETTINGCHANGE || msg == WM_THEMECHANGED {
+        crate::system::mark_dirty();
+        crate::system::repaint();
+    }
     if msg == WM_NCHITTEST {
         let hit = DefSubclassProc(hwnd, msg, wp, lp);
         if hit.0 == HTCLIENT as isize {
