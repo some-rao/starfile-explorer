@@ -57,13 +57,21 @@ pub fn input_hook(raw: &mut egui::RawInput) {
     let Some(action) = shot.input.pop() else { return };
     shot.next_input = Instant::now() + Duration::from_millis(500);
     let modifiers = egui::Modifiers::NONE;
-    if let Some(pos) = action.strip_prefix("click:").and_then(|p| {
+    let point = |p: &str| -> Option<egui::Pos2> {
         let (x, y) = p.split_once(',')?;
         Some(egui::pos2(x.parse().ok()?, y.parse().ok()?))
-    }) {
+    };
+    if let Some(pos) = action.strip_prefix("hover:").and_then(point) {
         raw.events.push(egui::Event::PointerMoved(pos));
-        raw.events.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers });
-        shot.release = Some(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers });
+    } else if let Some((pos, button)) = action
+        .strip_prefix("rclick:")
+        .and_then(point)
+        .map(|p| (p, egui::PointerButton::Secondary))
+        .or_else(|| action.strip_prefix("click:").and_then(point).map(|p| (p, egui::PointerButton::Primary)))
+    {
+        raw.events.push(egui::Event::PointerMoved(pos));
+        raw.events.push(egui::Event::PointerButton { pos, button, pressed: true, modifiers });
+        shot.release = Some(egui::Event::PointerButton { pos, button, pressed: false, modifiers });
     } else if let Some(key) = action.strip_prefix("key:").and_then(egui::Key::from_name) {
         raw.events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
         shot.release = Some(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });

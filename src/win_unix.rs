@@ -83,35 +83,6 @@ pub fn disk_space(path: &Path) -> Option<(u64, u64)> {
     Some((st.f_bavail as u64 * frsize, st.f_blocks as u64 * frsize))
 }
 
-fn file_uri(p: &Path) -> String {
-    use std::os::unix::ffi::OsStrExt;
-    let mut s = String::from("file://");
-    for &b in p.as_os_str().as_bytes() {
-        if b.is_ascii_alphanumeric() || b"/-_.~".contains(&b) {
-            s.push(b as char);
-        } else {
-            s.push_str(&format!("%{b:02X}"));
-        }
-    }
-    s
-}
-
-/// freedesktop FileManager1 arayüzü (Nautilus, Dolphin, Nemo, Thunar destekler)
-fn file_manager_call(method: &str, path: &Path) -> bool {
-    Command::new("dbus-send")
-        .args([
-            "--session",
-            "--dest=org.freedesktop.FileManager1",
-            "--type=method_call",
-            "/org/freedesktop/FileManager1",
-            &format!("org.freedesktop.FileManager1.{method}"),
-            &format!("array:string:{}", file_uri(path)),
-            "string:",
-        ])
-        .status()
-        .is_ok_and(|s| s.success())
-}
-
 /// Dosyanın MIME türü: içeriğe bakan `xdg-mime`, olmazsa uzantıdan
 pub fn mime_of(path: &Path) -> Option<String> {
     xdg_mime(&["query", "filetype", &path.display().to_string()]).or_else(|| mime_guess::from_path(path).first_raw().map(String::from))
@@ -138,14 +109,6 @@ pub fn default_app(path: &Path) -> Option<crate::properties::AppInfo> {
 
 pub fn open_with(path: &Path) {
     let _ = open::that_detached(path);
-}
-
-pub fn show_in_explorer(path: &Path) {
-    if !file_manager_call("ShowItems", path) {
-        if let Some(dir) = path.parent() {
-            let _ = open::that_detached(dir);
-        }
-    }
 }
 
 /// Flatpak sandbox'ında mı: host'taki programlar orada doğrudan görünmez

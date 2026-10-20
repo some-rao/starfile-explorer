@@ -12,6 +12,7 @@ use egui_extras::{Column, TableBuilder};
 use serde::{Deserialize, Serialize};
 
 use crate::fsutil::{self, Conflict, Entry, Job, JobKind, PreviewData, SortKey};
+use crate::menu::{self, Cmd, Menu, Node, Quick};
 use crate::scheme;
 use crate::shell::{self, ImageCache, Img, MenuResult};
 use crate::tab::{normalize, Tab, THIS_PC};
@@ -252,9 +253,12 @@ enum Action {
     Terminal(PathBuf),
     RunTerminal { name: String, args: String, dir: PathBuf },
     Properties(PathBuf),
-    ShowInExplorer(PathBuf),
     OpenWith(PathBuf),
     ShellMenu { extended: bool },
+    /// Modern (Win11 tarzı) sağ tık menüsünü aç
+    OpenMenu { target: MenuTarget, pos: Pos2 },
+    /// Gerçek yerel menüyü aç (Shift+F10 / "Daha fazla seçenek")
+    NativeMenu { paths: Vec<PathBuf>, background: Option<PathBuf>, extended: bool },
     CalcSize,
     AddBookmark(PathBuf),
     RemoveBookmark(PathBuf),
@@ -281,6 +285,20 @@ enum UndoOp {
     Moved(Vec<(PathBuf, PathBuf)>),
     Copied(Vec<PathBuf>),
     Trashed(Vec<PathBuf>),
+}
+
+/// Sağ tık menüsünün hedefi: seçili öğeler ya da klasörün boş alanı.
+#[derive(Clone)]
+enum MenuTarget {
+    Items { paths: Vec<PathBuf>, is_dir: bool, in_search: bool, primary: PathBuf },
+    Background { folder: PathBuf, in_search: bool },
+}
+
+/// Açık modern sağ tık menüsü ve ürettiği uygulama komutları.
+struct MenuState {
+    menu: Menu,
+    actions: Vec<Action>,
+    target: MenuTarget,
 }
 
 struct Renaming {
@@ -365,6 +383,8 @@ pub struct App {
     item_rects: Vec<(usize, Rect)>,
     grid_scroll: (f32, f32),
     silent_jobs: Vec<usize>,
+    /// Açık modern sağ tık menüsü
+    menu: Option<MenuState>,
     saved_config: String,
     last_autosave: Instant,
     /// Açılış: pencere ilk içerik (liste + ikonlar) hazır olana dek gizli
@@ -408,6 +428,10 @@ fn setup_fonts(ctx: &egui::Context) {
                 .unwrap()
                 .push("segoe_sym".into());
         }
+        // Menüdeki varsayılan satır (Aç) yarı kalın: Windows 11 Segoe UI Semibold kullanır
+        if let Ok(bytes) = std::fs::read("C:\\Windows\\Fonts\\seguisb.ttf") {
+            fonts.font_data.insert("ui_semibold".into(), Arc::new(egui::FontData::from_owned(bytes)));
+        }
     }
     // İkonlar: önce egui'nin emoji/ikon fontları, böylece Segoe UI'ın tek renkli glifleri araya girmez
     let mut icons: Vec<String> = vec!["emoji-icon-font".into(), "NotoEmoji-Regular".into()];
@@ -429,6 +453,13 @@ fn setup_fonts(ctx: &egui::Context) {
     }
     fonts.families.insert(egui::FontFamily::Name(ICONS.into()), icons);
     fonts.families.insert(egui::FontFamily::Name(FLUENT.into()), fluent);
+    // Yarı kalın aile (menüdeki varsayılan satır). Linux'ta normal yazı tipine düşer.
+    let prop = fonts.families[&egui::FontFamily::Proportional].clone();
+    let mut semibold = prop;
+    if fonts.font_data.contains_key("ui_semibold") {
+        semibold.insert(0, "ui_semibold".into());
+    }
+    fonts.families.insert(egui::FontFamily::Name("ui_semibold".into()), semibold);
     ctx.set_fonts(fonts);
 }
 
@@ -833,6 +864,17 @@ pub(crate) mod g {
     pub const RESTORE: &str = "\u{E923}";
     pub const CLOSE: &str = "\u{E8BB}";
     pub const ICONS_VIEW: &str = "\u{E739}";
+    pub const OPEN_WITH: &str = "\u{E7AC}";
+    pub const NEW_TAB: &str = "\u{E8A7}";
+    pub const SHOW: &str = "\u{E8B7}";
+    pub const COPY_PATH: &str = "\u{E71B}";
+    pub const PROPERTIES: &str = "\u{E713}";
+    pub const VIEW: &str = "\u{E890}";
+    pub const UNDO: &str = "\u{E7A7}";
+    pub const FOLDER: &str = "\u{E8F4}";
+    pub const DOCUMENT: &str = "\u{E8A5}";
+    pub const TERMINAL: &str = "\u{E756}";
+    pub const CALC_SIZE: &str = "\u{E8EF}";
 }
 
 /// Fluent UI System Icons glif kodları (assets/fluent-icons.ttf, MIT)
@@ -866,6 +908,17 @@ pub(crate) mod g {
     pub const RESTORE: &str = "\u{EB96}";
     pub const CLOSE: &str = "\u{F369}";
     pub const ICONS_VIEW: &str = "\u{F462}";
+    pub const OPEN_WITH: &str = "\u{F8CB}";
+    pub const NEW_TAB: &str = "\u{F109}";
+    pub const SHOW: &str = "\u{F68F}";
+    pub const COPY_PATH: &str = "\u{F4E4}";
+    pub const PROPERTIES: &str = "\u{E824}";
+    pub const VIEW: &str = "\u{F462}";
+    pub const UNDO: &str = "\u{F15B}";
+    pub const FOLDER: &str = "\u{F10C}";
+    pub const DOCUMENT: &str = "\u{ECD9}";
+    pub const TERMINAL: &str = "\u{E8BD}";
+    pub const CALC_SIZE: &str = "\u{F18A}";
 }
 
 /// Windows'un kendi sağ tık menüsü ve OLE sürükle-bırak yalnızca Windows'ta
@@ -1184,6 +1237,7 @@ impl App {
             item_rects: vec![],
             grid_scroll: (0.0, 0.0),
             silent_jobs: vec![],
+            menu: None,
             saved_config: String::new(),
             last_autosave: Instant::now(),
             started: Instant::now(),
@@ -1914,7 +1968,6 @@ impl App {
                     None => self.toast(crate::i18n::t("Özellikler gösterilemedi"), true),
                 }
             }
-            Action::ShowInExplorer(p) => win::show_in_explorer(&p),
             Action::OpenWith(p) => win::open_with(&p),
             Action::ShellMenu { extended } => {
                 let mut paths = self.tab().selected_paths();
@@ -1926,6 +1979,20 @@ impl App {
                         self.apply(Action::Rename);
                     }
                     // Menü kendi mesaj döngüsünü çalıştırdı; egui'deki basılı fare durumunu sıfırla
+                    self.inject_release = ctx.input(|i| i.pointer.latest_pos());
+                }
+            }
+            Action::OpenMenu { target, pos } => self.open_context_menu(&ctx, target, pos),
+            Action::NativeMenu { paths, background, extended } => {
+                if let Some(hwnd) = self.hwnd {
+                    let res = if let Some(folder) = background {
+                        shell::background_context_menu(hwnd, &folder, extended)
+                    } else {
+                        shell::context_menu(hwnd, &paths, extended)
+                    };
+                    if let MenuResult::Rename = res {
+                        self.apply(Action::Rename);
+                    }
                     self.inject_release = ctx.input(|i| i.pointer.latest_pos());
                 }
             }
@@ -3115,6 +3182,236 @@ impl App {
             ui.add_space(20.0);
         });
     }
+
+    /// Modern (Windows 11 tarzı) sağ tık menüsünü kurar: uygulama komutları + gerçek
+    /// kabuk komutları (terminal, arşiv, birlikte aç…) + "Daha fazla seçenek".
+    fn open_context_menu(&mut self, ctx: &egui::Context, target: MenuTarget, pos: Pos2) {
+        let mut m = Menu::new(pos);
+        let mut acts: Vec<Action> = Vec::new();
+        let mut shell_paths: Vec<PathBuf> = Vec::new();
+        match target.clone() {
+            MenuTarget::Items { paths, is_dir, in_search, primary } => {
+                shell_paths = paths;
+                let open_icon = if is_dir { g::FOLDER } else { g::DOCUMENT };
+                app_node(&mut acts, &mut m, "Aç", open_icon, Action::OpenSelected, |n| n.bold().shortcut("Enter"));
+                if is_dir {
+                    app_node(&mut acts, &mut m, "Yeni sekmede aç", g::NEW_TAB, Action::NewTab(primary.clone()), |n| n);
+                    app_node(&mut acts, &mut m, "Terminalde aç", g::TERMINAL, Action::Terminal(primary.clone()), |n| n);
+                } else {
+                    app_node(&mut acts, &mut m, "Birlikte aç…", g::OPEN_WITH, Action::OpenWith(primary.clone()), |n| n);
+                }
+                if in_search {
+                    if let Some(parent) = primary.parent() {
+                        app_node(&mut acts, &mut m, "Dosya konumunu aç", g::SHOW, Action::NewTab(parent.to_path_buf()), |n| n);
+                    }
+                }
+                if is_dir {
+                    app_node(&mut acts, &mut m, "Boyutu hesapla", g::CALC_SIZE, Action::CalcSize, |n| n.sep_before());
+                    app_node(&mut acts, &mut m, "Hızlı erişime sabitle", g::PIN, Action::AddBookmark(primary.clone()), |n| n);
+                }
+                m.quick = vec![
+                    quick(&mut acts, Action::Cut, g::CUT, "Kes (Ctrl+X)", true),
+                    quick(&mut acts, Action::Copy, g::COPY, "Kopyala (Ctrl+C)", true),
+                    quick(&mut acts, Action::Rename, g::RENAME, "Yeniden adlandır (F2)", true),
+                    quick(&mut acts, Action::Delete { permanent: false }, g::DELETE, "Sil                               Del", true),
+                ];
+            }
+            MenuTarget::Background { folder, in_search } => {
+                let mut view = Node::new(crate::i18n::t("Görünüm")).with_icon(g::VIEW);
+                for (i, (_, n)) in VIEW_LEVELS.iter().enumerate() {
+                    let id = acts.len() as u32;
+                    acts.push(Action::SetView(i));
+                    view.children.push(Node::new(crate::i18n::t(n)).with_cmd(Cmd::App(id)).checked(i == self.view_level));
+                }
+                m.nodes.push(view);
+                let cur_sort = self.sort;
+                let mut sort = Node::new(crate::i18n::t("Sırala")).with_icon(g::SORT);
+                for (k, n) in [
+                    (SortKey::Name, crate::i18n::t("Ad")),
+                    (SortKey::Modified, crate::i18n::t("Değiştirme tarihi")),
+                    (SortKey::Type, crate::i18n::t("Tür")),
+                    (SortKey::Size, crate::i18n::t("Boyut")),
+                ] {
+                    let id = acts.len() as u32;
+                    acts.push(Action::Sort(k));
+                    sort.children.push(Node::new(n).with_cmd(Cmd::App(id)).checked(cur_sort == k));
+                }
+                m.nodes.push(sort);
+                app_node(&mut acts, &mut m, "Yenile (F5)", g::REFRESH, Action::Refresh, |n| n);
+                if !in_search {
+                    let has_clip = self.clipboard.is_some();
+                    app_node(&mut acts, &mut m, "Yapıştır (Ctrl+V)", g::PASTE, Action::Paste, move |n| {
+                        let n = n.sep_before();
+                        if has_clip { n } else { n.disabled() }
+                    });
+                    if !self.undo.is_empty() {
+                        app_node(&mut acts, &mut m, "Geri al                   Ctrl+Z", g::UNDO, Action::Undo, |n| n);
+                    }
+                    let mut new = Node::new(crate::i18n::t("Yeni")).with_icon(g::ADD).sep_before();
+                    let id = acts.len() as u32;
+                    acts.push(Action::NewFolder);
+                    new.children.push(
+                        Node::new(crate::i18n::t("Yeni klasör"))
+                            .with_icon(g::FOLDER)
+                            .with_cmd(Cmd::App(id))
+                            .shortcut("Ctrl+Shift+N"),
+                    );
+                    let id = acts.len() as u32;
+                    acts.push(Action::NewFile);
+                    new.children.push(Node::new(crate::i18n::t("Metin Belgesi")).with_icon(g::DOCUMENT).with_cmd(Cmd::App(id)));
+                    m.nodes.push(new);
+                    app_node(&mut acts, &mut m, "Terminalde aç", g::TERMINAL, Action::Terminal(folder.clone()), |n| n);
+                }
+            }
+        }
+        if cfg!(windows) && !shell_paths.is_empty() {
+            // Kabuk komutları (arşiv, üçüncü taraf, birlikte aç…) uygulama komutlarından sonra
+            self.push_shell_nodes(ctx, &mut m, &shell_paths, None);
+        }
+        if let MenuTarget::Items { primary, .. } = &target {
+            app_node(&mut acts, &mut m, "Yol olarak kopyala   Ctrl+Shift+C", g::COPY_PATH, Action::CopyPath, |n| n.sep_before());
+            app_node(&mut acts, &mut m, "Özellikler", g::PROPERTIES, Action::Properties(primary.clone()), |n| {
+                n.shortcut("Alt+Enter")
+            });
+        }
+        if cfg!(windows) {
+            // Son satır: Explorer'ın klasik menüsünü açar
+            let (label, _) = menu::parts("Daha fazla seçenek göster  Shift+F10");
+            m.nodes.push(Node::new(label).with_icon(g::MORE).with_cmd(Cmd::More).sep_before());
+        }
+        self.menu = Some(MenuState { menu: m, actions: acts, target });
+    }
+
+    /// Gerçek kabuk menüsünü okuyup modern menüye ekler.
+    fn push_shell_nodes(&mut self, ctx: &egui::Context, m: &mut Menu, paths: &[PathBuf], background: Option<&Path>) {
+        let Some(hwnd) = self.hwnd else { return };
+        let Some(sm) = crate::shell::ShellMenu::build(hwnd, paths, background, false) else { return };
+        if sm.is_empty() {
+            return;
+        }
+        let mut pending_sep = true;
+        for item in sm.items.iter() {
+            if item.separator {
+                pending_sep = true;
+                continue;
+            }
+            // Klasik kabuk komutları (7-Zip, "Open with …", sürücü araçları) Windows 11'in
+            // modern menüsünde görünmez; yalnızca "Daha fazla seçenek"te listelenir.
+            if !modern_shell_item(&item.label) {
+                continue;
+            }
+            let mut n = menu::shell_node(item, ctx, &item.id.to_string());
+            n.cmd = Some(Cmd::Shell(item.id));
+            if pending_sep {
+                n.sep = true;
+                pending_sep = false;
+            }
+            m.nodes.push(n);
+        }
+        m.shell = Some(sm);
+    }
+
+    /// Açık menüyü çizer ve seçilen komutu çalıştırır.
+    fn draw_context_menu(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        if !matches!(self.dialog, Dialog::None) {
+            self.menu = None;
+            return;
+        }
+        let Some(state) = self.menu.as_mut() else { return };
+        let outcome = menu::show(ctx, &mut state.menu);
+        match outcome {
+            None => {}
+            Some(menu::Outcome::Close) => self.menu = None,
+            Some(menu::Outcome::Command(Cmd::App(i))) => {
+                if let Some(mut st) = self.menu.take() {
+                    if (i as usize) < st.actions.len() {
+                        let a = st.actions.remove(i as usize);
+                        actions.push(a);
+                    }
+                }
+            }
+            Some(menu::Outcome::Command(Cmd::Shell(id))) => {
+                if let Some(st) = self.menu.take() {
+                    if let Some(sm) = st.menu.shell {
+                        if let MenuResult::Rename = sm.invoke(id) {
+                            actions.push(Action::Rename);
+                        }
+                        self.inject_release = ctx.input(|i| i.pointer.latest_pos());
+                    }
+                }
+            }
+            Some(menu::Outcome::Command(Cmd::More)) => {
+                if let Some(st) = self.menu.take() {
+                    let (paths, background) = match st.target {
+                        MenuTarget::Items { paths, .. } => (paths, None),
+                        MenuTarget::Background { folder, .. } => (vec![], Some(folder)),
+                    };
+                    actions.push(Action::NativeMenu { paths, background, extended: false });
+                }
+            }
+        }
+    }
+}
+
+/// Windows 11'in modern sağ tık menüsünde görünen kabuk komutları. Klasik menüde
+/// kalanlar (arşiv araçları, "Open with …" vb.) yalnızca "Daha fazla seçenek"te çıkar.
+fn modern_shell_item(label: &str) -> bool {
+    const MODERN: &[&str] = &[
+        "set as desktop background",
+        "rotate right",
+        "rotate left",
+        "cast to device",
+        "give access to",
+        "edit",
+        "compress to zip file",
+        "always keep on this device",
+        "free up space",
+        "scan with microsoft defender",
+        "add to favorites",
+        "masaüstü arka planı olarak ayarla",
+        "sağa döndür",
+        "sola döndür",
+        "cihaza yayınla",
+        "erişim ver",
+        "düzenle",
+        "sıkıştırılmış (zip) klasör oluştur",
+        "her zaman bu cihazda tut",
+        "yer aç",
+        "microsoft defender ile tara",
+        "sık kullanılanlara ekle",
+    ];
+    let l = label.trim().trim_end_matches(['.', '…']).to_lowercase();
+    MODERN.iter().any(|m| l == *m)
+}
+
+/// Menüye uygulama komutu ekler; komut `MenuState.actions` içinde saklanır.
+/// Etiket ve varsa kısayol i18n anahtarından ayrılır.
+fn app_node(acts: &mut Vec<Action>, m: &mut Menu, key: &str, glyph: &'static str, action: Action, build: impl FnOnce(Node) -> Node) {
+    let (label, shortcut) = menu::parts(key);
+    let id = acts.len() as u32;
+    acts.push(action);
+    let mut node = Node::new(label).with_icon(glyph).with_cmd(Cmd::App(id));
+    if let Some(sc) = shortcut {
+        node.shortcut = Some(sc);
+    }
+    m.nodes.push(build(node));
+}
+
+/// Üstteki simge düğmesi (komutu `actions` içinde saklar).
+fn quick(acts: &mut Vec<Action>, action: Action, glyph: &'static str, key: &str, enabled: bool) -> Quick {
+    let (label, _) = menu::parts(key);
+    let id = acts.len() as u32;
+    acts.push(action);
+    Quick { cmd: Cmd::App(id), glyph, label, enabled }
+}
+
+/// Öğe menüsünün hedefi: tıklanan öğe artı o anki seçim.
+fn menu_target_items(t: &Tab, path: &Path, is_dir: bool, in_search: bool) -> MenuTarget {
+    let mut paths = t.selected_paths();
+    if paths.is_empty() {
+        paths.push(path.to_path_buf());
+    }
+    MenuTarget::Items { paths, is_dir, in_search, primary: path.to_path_buf() }
 }
 
 /// %ORTAM% değişkenleri, ~ ve kabuk kısayolları (shell:downloads vb.)
@@ -3175,160 +3472,6 @@ fn type_name_cached(map: &mut HashMap<String, String>, e: &Entry) -> String {
             if n.is_empty() { fsutil::kind_label(e) } else { n }
         })
         .clone()
-}
-
-fn mi(ui: &mut egui::Ui, icon: &str, text: &str) -> bool {
-    ui.add(egui::Button::new(icon_label(ui, icon, None, text))).clicked()
-}
-
-/// Öğe sağ tık menüsü (sık kullanılanlar + Windows'un tam menüsü)
-fn item_menu(ui: &mut egui::Ui, path: &Path, is_dir: bool, in_search: bool, actions: &mut Vec<Action>) {
-    ui.set_min_width(240.0);
-    if mi(ui, "▶", crate::i18n::t("Aç                              Enter")) {
-        actions.push(Action::OpenSelected);
-        ui.close_menu();
-    }
-    if is_dir {
-        if mi(ui, "🗂", crate::i18n::t("Yeni sekmede aç")) {
-            actions.push(Action::NewTab(path.to_path_buf()));
-            ui.close_menu();
-        }
-        if mi(ui, "📋", crate::i18n::t("Buraya yapıştır")) {
-            actions.push(Action::PasteInto(path.to_path_buf()));
-            ui.close_menu();
-        }
-    } else {
-        if mi(ui, "🔀", crate::i18n::t("Birlikte aç…")) {
-            actions.push(Action::OpenWith(path.to_path_buf()));
-            ui.close_menu();
-        }
-    }
-    if in_search {
-        if let Some(parent) = path.parent() {
-            if mi(ui, "📂", crate::i18n::t("Dosya konumunu aç")) {
-                actions.push(Action::NewTab(parent.to_path_buf()));
-                ui.close_menu();
-            }
-        }
-    }
-    ui.separator();
-    if mi(ui, "✂", crate::i18n::t("Kes                             Ctrl+X")) {
-        actions.push(Action::Cut);
-        ui.close_menu();
-    }
-    if mi(ui, "📄", crate::i18n::t("Kopyala                       Ctrl+C")) {
-        actions.push(Action::Copy);
-        ui.close_menu();
-    }
-    if mi(ui, "🔗", crate::i18n::t("Yol olarak kopyala   Ctrl+Shift+C")) {
-        actions.push(Action::CopyPath);
-        ui.close_menu();
-    }
-    if mi(ui, "✏", crate::i18n::t("Yeniden adlandır          F2")) {
-        actions.push(Action::Rename);
-        ui.close_menu();
-    }
-    if mi(ui, "🗑", crate::i18n::t("Sil                               Del")) {
-        actions.push(Action::Delete { permanent: false });
-        ui.close_menu();
-    }
-    ui.separator();
-    if is_dir {
-        if mi(ui, "📏", crate::i18n::t("Boyutu hesapla")) {
-            actions.push(Action::CalcSize);
-            ui.close_menu();
-        }
-        if mi(ui, "📌", crate::i18n::t("Hızlı erişime sabitle")) {
-            actions.push(Action::AddBookmark(path.to_path_buf()));
-            ui.close_menu();
-        }
-        if mi(ui, "⌨", crate::i18n::t("Terminalde aç")) {
-            actions.push(Action::Terminal(path.to_path_buf()));
-            ui.close_menu();
-        }
-    }
-    let show_label = if cfg!(windows) { "Explorer'da göster" } else { "Dosya yöneticisinde göster" };
-    if mi(ui, "🔎", crate::i18n::t(show_label)) {
-        actions.push(Action::ShowInExplorer(path.to_path_buf()));
-        ui.close_menu();
-    }
-    if mi(ui, "ℹ", crate::i18n::t("Özellikler                   Alt+Enter")) {
-        actions.push(Action::Properties(path.to_path_buf()));
-        ui.close_menu();
-    }
-    if NATIVE_MENU {
-        ui.separator();
-        if mi(ui, "☰", crate::i18n::t("Daha fazla seçenek göster  Shift+F10")) {
-            actions.push(Action::ShellMenu { extended: false });
-            ui.close_menu();
-        }
-    }
-}
-
-/// Arka plan (boş alan) sağ tık menüsü
-fn background_menu(ui: &mut egui::Ui, current: &Path, in_search: bool, can_undo: bool, view_level: usize, actions: &mut Vec<Action>) {
-    ui.set_min_width(240.0);
-    ui.menu_button(crate::i18n::t("☰  Görünüm"), |ui| {
-        for (i, (_, n)) in VIEW_LEVELS.iter().enumerate() {
-            if ui.radio(view_level == i, crate::i18n::t(n)).clicked() {
-                actions.push(Action::SetView(i));
-                ui.close_menu();
-            }
-        }
-    });
-    ui.menu_button(crate::i18n::t("↕  Sırala"), |ui| {
-        for (k, n) in [(SortKey::Name, crate::i18n::t("Ad")), (SortKey::Modified, crate::i18n::t("Değiştirme tarihi")), (SortKey::Type, crate::i18n::t("Tür")), (SortKey::Size, crate::i18n::t("Boyut"))] {
-            if ui.button(n).clicked() {
-                actions.push(Action::Sort(k));
-                ui.close_menu();
-            }
-        }
-    });
-    if mi(ui, "⟳", crate::i18n::t("Yenile                          F5")) {
-        actions.push(Action::Refresh);
-        ui.close_menu();
-    }
-    ui.separator();
-    if !in_search {
-        if mi(ui, "📋", crate::i18n::t("Yapıştır                       Ctrl+V")) {
-            actions.push(Action::Paste);
-            ui.close_menu();
-        }
-        if can_undo {
-            if mi(ui, "↶", crate::i18n::t("Geri al                         Ctrl+Z")) {
-                actions.push(Action::Undo);
-                ui.close_menu();
-            }
-        }
-        ui.separator();
-        ui.menu_button(crate::i18n::t("➕  Yeni"), |ui| {
-            if ui.button(crate::i18n::t("📁  Klasör    Ctrl+Shift+N")).clicked() {
-                actions.push(Action::NewFolder);
-                ui.close_menu();
-            }
-            if ui.button(crate::i18n::t("📝  Metin Belgesi")).clicked() {
-                actions.push(Action::NewFile);
-                ui.close_menu();
-            }
-        });
-        ui.separator();
-    }
-    if mi(ui, "☑", crate::i18n::t("Tümünü seç                Ctrl+A")) {
-        actions.push(Action::SelectAll);
-        ui.close_menu();
-    }
-    if mi(ui, "⌨", crate::i18n::t("Terminalde aç")) {
-        actions.push(Action::Terminal(current.to_path_buf()));
-        ui.close_menu();
-    }
-    if mi(ui, "📌", crate::i18n::t("Hızlı erişime sabitle    Ctrl+D")) {
-        actions.push(Action::AddBookmark(current.to_path_buf()));
-        ui.close_menu();
-    }
-    if mi(ui, "ℹ", crate::i18n::t("Özellikler")) {
-        actions.push(Action::Properties(current.to_path_buf()));
-        ui.close_menu();
-    }
 }
 
 fn drop_target_p(painter: &egui::Painter, resp: &egui::Response, target: &Path, accent: Color32, actions: &mut Vec<Action>) -> bool {
@@ -3397,9 +3540,9 @@ fn handle_item_click(t: &mut Tab, resp: &egui::Response, row: usize, idx: usize,
 impl App {
     fn file_area(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         let accent = self.accent;
-        let (in_search, current, can_undo) = {
+        let (in_search, current) = {
             let t = &self.tabs[self.active];
-            (t.search.is_some(), t.path.clone(), !self.undo.is_empty())
+            (t.search.is_some(), t.path.clone())
         };
 
         // Boş alan: tık seçimi temizler, sürükleme seçim dikdörtgeni çizer, sağ tık klasör menüsü
@@ -3413,12 +3556,13 @@ impl App {
                 self.tab().selection.clear();
             }
         }
-        let shift_rclick = NATIVE_MENU && bg.secondary_clicked() && ui.input(|i| i.modifiers.shift);
-        if shift_rclick {
-            actions.push(Action::ShellMenu { extended: true });
-        } else {
-            let lvl = self.view_level;
-            bg.context_menu(|ui| background_menu(ui, &current, in_search, can_undo, lvl, actions));
+        if bg.secondary_clicked() {
+            let pos = bg.interact_pointer_pos().unwrap_or_default();
+            if NATIVE_MENU && ui.input(|i| i.modifiers.shift) {
+                actions.push(Action::NativeMenu { paths: vec![], background: Some(current.clone()), extended: true });
+            } else {
+                actions.push(Action::OpenMenu { target: MenuTarget::Background { folder: current.clone(), in_search }, pos });
+            }
         }
 
         {
@@ -3658,9 +3802,9 @@ impl App {
                     if e.is_dir {
                         drop_target_p(&painter, &resp, &e.path, accent, actions);
                     }
-                    if !(NATIVE_MENU && resp.secondary_clicked() && resp.ctx.input(|i| i.modifiers.shift)) {
-                        let (p, d) = (e.path.clone(), e.is_dir);
-                        resp.context_menu(|ui| item_menu(ui, &p, d, in_search, actions));
+                    if resp.secondary_clicked() && !(NATIVE_MENU && resp.ctx.input(|i| i.modifiers.shift)) {
+                        let pos = resp.interact_pointer_pos().unwrap_or_default();
+                        actions.push(Action::OpenMenu { target: menu_target_items(t, &e.path, e.is_dir, in_search), pos });
                     }
                 });
             });
@@ -3846,9 +3990,9 @@ impl App {
                             }
                             ui.label(crate::i18n::tf("Değiştirme: {}", &[&fsutil::format_time(e.modified)]));
                         });
-                        if !(NATIVE_MENU && resp.secondary_clicked() && resp.ctx.input(|i| i.modifiers.shift)) {
-                            let (p, d) = (e.path.clone(), e.is_dir);
-                            resp.context_menu(|ui| item_menu(ui, &p, d, in_search, actions));
+                        if resp.secondary_clicked() && !(NATIVE_MENU && resp.ctx.input(|i| i.modifiers.shift)) {
+                            let pos = resp.interact_pointer_pos().unwrap_or_default();
+                            actions.push(Action::OpenMenu { target: menu_target_items(t, &e.path, e.is_dir, in_search), pos });
                         }
                     }
                 }
@@ -4523,6 +4667,7 @@ impl eframe::App for App {
         self.dialogs(ctx);
         self.overlays(ctx);
         self.drag_overlay(ctx);
+        self.draw_context_menu(ctx, &mut actions);
 
         // Pencereden dışarı sürükleme → Windows'un sürükle-bırak'ı (masaüstü, Explorer, diğer uygulamalar)
         if let Some(p) = DragAndDrop::payload::<DragPaths>(ctx) {

@@ -157,6 +157,39 @@ pub fn context_menu(_hwnd: isize, _paths: &[PathBuf], _extended: bool) -> MenuRe
     MenuResult::None
 }
 
+/// Kabuk menüsü Linux'ta yok; modern menü yalnızca uygulamanın kendi komutlarını gösterir.
+pub fn background_context_menu(_hwnd: isize, _folder: &Path, _extended: bool) -> MenuResult {
+    MenuResult::None
+}
+
+pub struct ShellMenuItem {
+    pub id: u32,
+    pub label: String,
+    pub enabled: bool,
+    pub checked: bool,
+    pub separator: bool,
+    pub children: Vec<ShellMenuItem>,
+    pub icon: Option<egui::ColorImage>,
+}
+
+pub struct ShellMenu {
+    pub items: Vec<ShellMenuItem>,
+}
+
+impl ShellMenu {
+    pub fn build(_hwnd: isize, _paths: &[PathBuf], _background: Option<&Path>, _extended: bool) -> Option<ShellMenu> {
+        None
+    }
+
+    pub fn is_empty(&self) -> bool {
+        true
+    }
+
+    pub fn invoke(&self, _id: u32) -> MenuResult {
+        MenuResult::None
+    }
+}
+
 pub fn drag_out(_paths: &[PathBuf]) -> bool {
     false
 }

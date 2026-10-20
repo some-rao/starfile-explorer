@@ -6,7 +6,7 @@ use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicIsize, Ordering};
 
-use windows::core::{implement, Interface, HRESULT, HSTRING, PCSTR, PCWSTR, PSTR};
+use windows::core::{implement, Interface, HRESULT, HSTRING, PCSTR, PCWSTR, PSTR, PWSTR};
 use windows::Win32::Foundation::{
     BOOL, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, HWND, LPARAM, LRESULT, POINT, RECT,
     SIZE, S_OK, WPARAM,
@@ -22,17 +22,19 @@ use windows::Win32::System::Ole::{DoDragDrop, IDropSource, IDropSource_Impl, DRO
 use windows::Win32::System::SystemServices::{MK_LBUTTON, MODIFIERKEYS_FLAGS};
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
-    BHID_DataObject, BHID_SFUIObject, DefSubclassProc, IContextMenu, IContextMenu2, IContextMenu3, IShellItemArray,
-    IShellItemImageFactory, SHCreateItemFromParsingName, SHCreateShellItemArrayFromIDLists, SHGetFileInfoW,
-    SHParseDisplayName, RemoveWindowSubclass, SetWindowSubclass, CMF_CANRENAME, CMF_EXTENDEDVERBS, CMF_NORMAL,
-    CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX, GCS_VERBW, SHFILEINFOW, SHGFI_TYPENAME,
-    SHGFI_USEFILEATTRIBUTES, SIIGBF, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY,
+    BHID_DataObject, BHID_SFUIObject, DefSubclassProc, IContextMenu, IContextMenu2, IContextMenu3, IShellFolder,
+    IShellItem, IShellItemArray, IShellItemImageFactory, SHCreateItemFromParsingName,
+    SHCreateShellItemArrayFromIDLists, SHGetFileInfoW, SHParseDisplayName, RemoveWindowSubclass, SetWindowSubclass,
+    CMF_CANRENAME, CMF_EXTENDEDVERBS, CMF_NORMAL, CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX, GCS_VERBW, SHFILEINFOW,
+    SHGFI_TYPENAME, SHGFI_USEFILEATTRIBUTES, SIIGBF, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreatePopupMenu, DestroyMenu, GetAncestor, GetCursorPos, GetWindowRect, IsZoomed, WindowFromPoint, GA_ROOT, TrackPopupMenuEx, HTBOTTOM, HTBOTTOMLEFT,
-    HTBOTTOMRIGHT, HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, SW_SHOWNORMAL, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, WM_NCHITTEST, WM_DRAWITEM, WM_INITMENUPOPUP, WM_MEASUREITEM, WM_MENUCHAR, WM_MENUSELECT,
-    WM_SETTINGCHANGE, WM_THEMECHANGED,
+    CreatePopupMenu, DestroyMenu, GetAncestor, GetCursorPos, GetMenuItemCount, GetMenuItemInfoW, GetMenuStringW,
+    GetWindowRect, IsZoomed, WindowFromPoint, GA_ROOT, TrackPopupMenuEx, HMENU, HTBOTTOM, HTBOTTOMLEFT,
+    HTBOTTOMRIGHT, HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, MENUITEMINFOW, MENU_ITEM_MASK,
+    MF_BYCOMMAND, MFS_CHECKED, MFS_DISABLED, MFT_SEPARATOR, MIIM_BITMAP, MIIM_FTYPE, MIIM_ID, MIIM_STATE,
+    MIIM_STRING, MIIM_SUBMENU, SW_SHOWNORMAL, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_NCHITTEST, WM_DRAWITEM,
+    WM_INITMENUPOPUP, WM_MEASUREITEM, WM_MENUCHAR, WM_MENUSELECT, WM_SETTINGCHANGE, WM_THEMECHANGED,
     CallNextHookEx, SetWindowsHookExW, UnhookWindowsHookEx, CBT_CREATEWNDW, HCBT_CREATEWND, HHOOK, WH_CBT, WS_CHILD,
     WM_CREATE, WM_SHOWWINDOW,
 };
@@ -359,37 +361,324 @@ pub fn context_menu(hwnd: isize, paths: &[PathBuf], extended: bool) -> MenuResul
             let _ = DestroyMenu(menu);
             return MenuResult::None;
         }
-        let mut pt = POINT::default();
-        let _ = GetCursorPos(&mut pt);
+        run_native(&cm, menu, HWND(hwnd as *mut c_void))
+    }
+}
+
+/// Klasörün *boş alanı* için gerçek menü (Görünüm/Sırala/Burada terminal aç gibi).
+/// `context_menu` yalnızca seçili öğeler içindir; o boşken bu kullanılır.
+pub fn background_context_menu(hwnd: isize, folder: &Path, extended: bool) -> MenuResult {
+    unsafe {
+        let Ok(item) = SHCreateItemFromParsingName::<_, _, IShellItem>(&hs(folder), None) else { return MenuResult::None };
+        let Ok(folder) = item.BindToHandler::<_, IShellFolder>(None, &BHID_SFUIObject) else { return MenuResult::None };
+        let Ok(menu) = CreatePopupMenu() else { return MenuResult::None };
         let hwnd = HWND(hwnd as *mut c_void);
-        ACTIVE_MENU.with(|m| *m.borrow_mut() = Some(cm.clone()));
-        let cmd = TrackPopupMenuEx(menu, (TPM_RETURNCMD | TPM_RIGHTBUTTON).0, pt.x, pt.y, hwnd, None);
-        ACTIVE_MENU.with(|m| *m.borrow_mut() = None);
-        let _ = DestroyMenu(menu);
-        if cmd.0 <= 0 {
+        let Ok(cm) = folder.CreateViewObject::<_, IContextMenu>(hwnd) else {
+            let _ = DestroyMenu(menu);
+            return MenuResult::None;
+        };
+        let mut flags = CMF_NORMAL;
+        if extended {
+            flags |= CMF_EXTENDEDVERBS;
+        }
+        if cm.QueryContextMenu(menu, 0, 1, 0x7FFF, flags).is_err() {
+            let _ = DestroyMenu(menu);
             return MenuResult::None;
         }
-        let id = (cmd.0 - 1) as usize;
-        let mut verb = [0u16; 64];
-        if cm.GetCommandString(id, GCS_VERBW, None, PSTR(verb.as_mut_ptr() as *mut u8), verb.len() as u32).is_ok() {
-            let len = verb.iter().position(|&c| c == 0).unwrap_or(0);
-            if String::from_utf16_lossy(&verb[..len]).eq_ignore_ascii_case("rename") {
+        run_native(&cm, menu, hwnd)
+    }
+}
+
+/// Yerel menüyü gösterir, seçilen komutu işler. Menüyü kendisi yok eder.
+unsafe fn run_native(cm: &IContextMenu, menu: HMENU, hwnd: HWND) -> MenuResult {
+    let mut pt = POINT::default();
+    let _ = GetCursorPos(&mut pt);
+    ACTIVE_MENU.with(|m| *m.borrow_mut() = Some(cm.clone()));
+    let cmd = TrackPopupMenuEx(menu, (TPM_RETURNCMD | TPM_RIGHTBUTTON).0, pt.x, pt.y, hwnd, None);
+    ACTIVE_MENU.with(|m| *m.borrow_mut() = None);
+    let _ = DestroyMenu(menu);
+    if cmd.0 <= 0 {
+        return MenuResult::None;
+    }
+    let id = (cmd.0 - 1) as usize;
+    let mut verb = [0u16; 64];
+    if cm.GetCommandString(id, GCS_VERBW, None, PSTR(verb.as_mut_ptr() as *mut u8), verb.len() as u32).is_ok() {
+        let len = verb.iter().position(|&c| c == 0).unwrap_or(0);
+        if String::from_utf16_lossy(&verb[..len]).eq_ignore_ascii_case("rename") {
+            return MenuResult::Rename;
+        }
+    }
+    let info = CMINVOKECOMMANDINFOEX {
+        cbSize: std::mem::size_of::<CMINVOKECOMMANDINFOEX>() as u32,
+        fMask: 0x4000 | 0x2000_0000, // CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE
+        hwnd,
+        lpVerb: PCSTR(id as *const u8),
+        lpVerbW: PCWSTR(id as *const u16),
+        nShow: SW_SHOWNORMAL.0,
+        ptInvoke: pt,
+        ..Default::default()
+    };
+    let _ = cm.InvokeCommand(&info as *const _ as *const CMINVOKECOMMANDINFO);
+    MenuResult::Invoked
+}
+
+// ---------------------------------------------------------------- menü ağacı (egui ile çizmek için)
+
+/// Shell menüsünden okunan tek satır. `id` 0 ise ayraçtır.
+pub struct ShellMenuItem {
+    pub id: u32,
+    pub label: String,
+    pub enabled: bool,
+    pub checked: bool,
+    pub separator: bool,
+    pub children: Vec<ShellMenuItem>,
+    pub icon: Option<egui::ColorImage>,
+}
+
+impl ShellMenuItem {
+    fn sep() -> Self {
+        ShellMenuItem { id: 0, label: String::new(), enabled: false, checked: false, separator: true, children: vec![], icon: None }
+    }
+}
+
+/// QueryContextMenu ile doldurulmuş gerçek menü; komut çalıştırmak için COM nesnesini
+/// yaşatması gerekir. App içinde tutulur ve menü kapanınca düşer.
+pub struct ShellMenu {
+    pub items: Vec<ShellMenuItem>,
+    cm: IContextMenu,
+    menu: HMENU,
+    hwnd: HWND,
+}
+
+impl Drop for ShellMenu {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = DestroyMenu(self.menu);
+        }
+    }
+}
+
+/// Windows 11'in modern menüsünde ayrıca gösterdiğimiz komutlar; kabuk bunları
+/// yeniden eklemesin diye elenir.
+const SKIP_VERBS: [&str; 18] = [
+    "open", "openas", "openwith", "runas", "cut", "copy", "paste", "delete", "rename", "properties", "link", "print",
+    "printto", "sendto", "copyaspath", "pintohome", "unpinfromhome", "share",
+];
+
+const SKIP_LABELS: [&str; 24] = [
+    "open", "open with", "cut", "copy", "paste", "delete", "rename", "properties", "send to", "print", "copy as path",
+    "pin to quick access", "unpin from quick access", "open in terminal", "share", "aç", "birlikte aç", "kes",
+    "kopyala", "yapıştır", "sil", "yeniden adlandır", "özellikler", "terminalde aç",
+];
+
+impl ShellMenu {
+    /// Gerçek kabuk menüsünü okur. `paths` boşsa klasörün boş alanı için menü kurulur.
+    pub fn build(hwnd: isize, paths: &[PathBuf], background: Option<&Path>, extended: bool) -> Option<ShellMenu> {
+        unsafe {
+            let hwnd = HWND(hwnd as *mut c_void);
+            let (cm, menu) = if let Some(folder) = background {
+                let item = SHCreateItemFromParsingName::<_, _, IShellItem>(&hs(folder), None).ok()?;
+                let folder = item.BindToHandler::<_, IShellFolder>(None, &BHID_SFUIObject).ok()?;
+                let cm = folder.CreateViewObject::<_, IContextMenu>(hwnd).ok()?;
+                let menu = CreatePopupMenu().ok()?;
+                if cm.QueryContextMenu(menu, 0, 1, 0x7FFF, CMF_NORMAL).is_err() {
+                    let _ = DestroyMenu(menu);
+                    return None;
+                }
+                (cm, menu)
+            } else {
+                let (arr, _pidls) = item_array(paths)?;
+                let cm = arr.BindToHandler::<_, IContextMenu>(None, &BHID_SFUIObject).ok()?;
+                let menu = CreatePopupMenu().ok()?;
+                let mut flags = CMF_NORMAL | CMF_CANRENAME;
+                if extended {
+                    flags |= CMF_EXTENDEDVERBS;
+                }
+                if cm.QueryContextMenu(menu, 0, 1, 0x7FFF, flags).is_err() {
+                    let _ = DestroyMenu(menu);
+                    return None;
+                }
+                (cm, menu)
+            };
+            let mut items = read_menu(&cm, menu, 0);
+            clean_items(&mut items);
+            if items.is_empty() {
+                let _ = DestroyMenu(menu);
+                return None;
+            }
+            Some(ShellMenu { items, cm, menu, hwnd })
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    /// Menü komutunu çalıştırır. "Yeniden adlandır" ise `Rename` döner (satır içi düzenleme).
+    pub fn invoke(&self, id: u32) -> MenuResult {
+        unsafe {
+            if id == 0 {
+                return MenuResult::None;
+            }
+            let idx = (id - 1) as usize;
+            if self.verb(id).as_deref() == Some("rename") {
                 return MenuResult::Rename;
             }
+            let mut pt = POINT::default();
+            let _ = GetCursorPos(&mut pt);
+            let info = CMINVOKECOMMANDINFOEX {
+                cbSize: std::mem::size_of::<CMINVOKECOMMANDINFOEX>() as u32,
+                fMask: 0x4000 | 0x2000_0000,
+                hwnd: self.hwnd,
+                lpVerb: PCSTR(idx as *const u8),
+                lpVerbW: PCWSTR(idx as *const u16),
+                nShow: SW_SHOWNORMAL.0,
+                ptInvoke: pt,
+                ..Default::default()
+            };
+            let _ = self.cm.InvokeCommand(&info as *const _ as *const CMINVOKECOMMANDINFO);
+            MenuResult::Invoked
         }
-        let info = CMINVOKECOMMANDINFOEX {
-            cbSize: std::mem::size_of::<CMINVOKECOMMANDINFOEX>() as u32,
-            fMask: 0x4000 | 0x2000_0000, // CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE
-            hwnd,
-            lpVerb: PCSTR(id as *const u8),
-            lpVerbW: PCWSTR(id as *const u16),
-            nShow: SW_SHOWNORMAL.0,
-            ptInvoke: pt,
+    }
+
+    fn verb(&self, id: u32) -> Option<String> {
+        unsafe {
+            let mut buf = [0u16; 128];
+            self.cm.GetCommandString((id - 1) as usize, GCS_VERBW, None, PSTR(buf.as_mut_ptr() as *mut u8), buf.len() as u32).ok()?;
+            let len = buf.iter().position(|&c| c == 0).unwrap_or(0);
+            Some(String::from_utf16_lossy(&buf[..len]).to_lowercase())
+        }
+    }
+}
+
+/// MENU_ITEM satırlarını özyinelemeli okur. Geciken alt menüler için WM_INITMENUPOPUP gönderilir.
+unsafe fn read_menu(cm: &IContextMenu, hmenu: HMENU, depth: usize) -> Vec<ShellMenuItem> {
+    let count = GetMenuItemCount(hmenu);
+    let mut out = Vec::new();
+    for i in 0..count {
+        let mut buf = [0u16; 256];
+        let mask = MIIM_ID.0 | MIIM_STATE.0 | MIIM_FTYPE.0 | MIIM_SUBMENU.0 | MIIM_STRING.0 | MIIM_BITMAP.0;
+        let mut mii = MENUITEMINFOW {
+            cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
+            fMask: MENU_ITEM_MASK(mask),
+            dwTypeData: PWSTR(buf.as_mut_ptr()),
+            cch: buf.len() as u32,
             ..Default::default()
         };
-        let _ = cm.InvokeCommand(&info as *const _ as *const CMINVOKECOMMANDINFO);
-        MenuResult::Invoked
+        if GetMenuItemInfoW(hmenu, i as u32, true, &mut mii).is_err() {
+            continue;
+        }
+        if mii.fType.0 & MFT_SEPARATOR.0 != 0 {
+            out.push(ShellMenuItem::sep());
+            continue;
+        }
+        let mut label = label_from(&buf);
+        if label.is_empty() {
+            // Sahipli çizilen (owner-draw) satırlarda metin GetMenuStringW ile gelir
+            let mut sbuf = [0u16; 256];
+            let n = GetMenuStringW(hmenu, mii.wID, Some(&mut sbuf), MF_BYCOMMAND);
+            if n > 0 {
+                label = label_from(&sbuf);
+            }
+        }
+        if label.is_empty() && mii.hSubMenu.is_invalid() {
+            continue;
+        }
+        let verb = if mii.wID != 0 { Some(command_verb(cm, mii.wID)) } else { None };
+        if let Some(v) = &verb {
+            if SKIP_VERBS.contains(&v.as_str()) {
+                continue;
+            }
+        }
+        if SKIP_LABELS.contains(&label.to_lowercase().as_str()) {
+            continue;
+        }
+        let children = if !mii.hSubMenu.is_invalid() && depth < 4 {
+            init_submenu(cm, mii.hSubMenu);
+            read_menu(cm, mii.hSubMenu, depth + 1)
+        } else {
+            vec![]
+        };
+        let icon = if !mii.hbmpItem.is_invalid() { hbitmap_to_image(mii.hbmpItem) } else { None };
+        out.push(ShellMenuItem {
+            id: mii.wID,
+            label,
+            enabled: mii.fState.0 & MFS_DISABLED.0 == 0,
+            checked: mii.fState.0 & MFS_CHECKED.0 != 0,
+            separator: false,
+            children,
+            icon,
+        });
     }
+    out
+}
+
+/// Alt menüler gecikmeli doluyorsa (Send To, 7-Zip…) WM_INITMENUPOPUP ile doldurtur.
+unsafe fn init_submenu(cm: &IContextMenu, hmenu: HMENU) {
+    if let Ok(cm2) = cm.cast::<IContextMenu2>() {
+        let _ = cm2.HandleMenuMsg(WM_INITMENUPOPUP, WPARAM(hmenu.0 as usize), LPARAM(0));
+    }
+}
+
+unsafe fn command_verb(cm: &IContextMenu, id: u32) -> String {
+    let mut buf = [0u16; 128];
+    if cm.GetCommandString((id - 1) as usize, GCS_VERBW, None, PSTR(buf.as_mut_ptr() as *mut u8), buf.len() as u32).is_err() {
+        return String::new();
+    }
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(0);
+    String::from_utf16_lossy(&buf[..len]).to_lowercase()
+}
+
+/// Menü etiketini sadeleştirir: `&` kısayol işaretleri ve sekme sonrası hizalamayı atar.
+fn label_from(buf: &[u16]) -> String {
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    let raw = String::from_utf16_lossy(&buf[..len]);
+    let mut out = String::new();
+    let mut chars = raw.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '&' => {
+                if chars.peek() == Some(&'&') {
+                    out.push('&');
+                    chars.next();
+                }
+            }
+            '\t' => break,
+            _ => out.push(c),
+        }
+    }
+    out.trim().to_string()
+}
+
+/// Baş/son/çift ayraçları ve aynı etiketli kopyaları atar.
+fn clean_items(items: &mut Vec<ShellMenuItem>) {
+    items.retain(|i| !i.separator || !i.label.is_empty());
+    let mut seen: Vec<String> = Vec::new();
+    items.retain(|i| {
+        if i.separator {
+            return true;
+        }
+        let key = i.label.to_lowercase();
+        if seen.contains(&key) {
+            return false;
+        }
+        seen.push(key);
+        true
+    });
+    while items.first().is_some_and(|i| i.separator) {
+        items.remove(0);
+    }
+    while items.last().is_some_and(|i| i.separator) {
+        items.pop();
+    }
+    let mut out: Vec<ShellMenuItem> = Vec::with_capacity(items.len());
+    for i in items.drain(..) {
+        if i.separator && out.last().is_some_and(|p| p.separator) {
+            continue;
+        }
+        out.push(i);
+    }
+    *items = out;
 }
 
 // ---------------------------------------------------------------- dışarı sürükle-bırak

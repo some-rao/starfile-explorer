@@ -110,12 +110,6 @@ pub fn open_with(path: &Path) {
         .spawn();
 }
 
-pub fn show_in_explorer(path: &Path) {
-    let _ = Command::new("explorer.exe")
-        .raw_arg(format!("/select,\"{}\"", path.display()))
-        .spawn();
-}
-
 pub fn open_terminal(dir: &Path) {
     let wt = Command::new("wt.exe")
         .arg("-d")
