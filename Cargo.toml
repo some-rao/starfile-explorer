@@ -11,7 +11,7 @@ rust-version = "1.82"
 [dependencies]
 eframe = { version = "0.31", features = ["persistence"] }
 egui = "0.31"
-egui_extras = "0.31"
+egui_extras = { version = "0.31", features = ["serde"] }
 rayon = "1"
 notify = "8"
 trash = "5"
@@ -22,6 +22,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = "2"
 sha2 = "0.10"
+# Galeri küçük resimleri: kabuk sağlayıcısı üretemezse fotoğrafı kendimiz küçültürüz
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 
 [features]
 # README görüntülerini üretmek için, bkz. src/screenshot.rs
@@ -32,7 +34,7 @@ winresource = "0.1"
 
 [target.'cfg(windows)'.dependencies]
 clipboard-win = "5"
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Pipes", "Win32_System_RemoteDesktop", "Win32_UI_Shell", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_System_Registry", "Win32_Globalization"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Pipes", "Win32_System_RemoteDesktop", "Win32_UI_Shell", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_System_Registry", "Win32_Globalization"] }
 
 windows = { version = "0.58", features = ["implement", "Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Graphics_Dwm", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Ole", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi", "Win32_Storage_FileSystem"] }
 windows-core = "0.58"
@@ -43,7 +45,14 @@ libc = "0.2"
 mime_guess = "2"
 freedesktop-icons = "0.4"
 resvg = { version = "0.45", default-features = false }
-image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+
+# egui'nin metin rasterleştiricisi (epaint) yerelleştirilmiş bir kopyadan geliyor:
+# glif kapsama eğrisi (vendor/epaint/src/text/font.rs) Windows Gezgini'nin
+# ClearType mürekkep yoğunluğuna yaklaşmak için değiştirildi. Sürüm eframe ile
+# aynı kalmalı (0.31.x).
+[patch.crates-io]
+epaint = { path = "vendor/epaint" }
+egui = { path = "vendor/egui" }
 
 [profile.release]
 opt-level = 3

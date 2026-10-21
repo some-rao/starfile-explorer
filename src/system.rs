@@ -1,8 +1,8 @@
-//! Windows kişiselleştirme ayarları: metin ölçeği, animasyon tercihi, DPI farkındalığı
+//! Windows kişiselleştirme ayarları: animasyon tercihi, DPI farkındalığı
 //! ve uygulama kimliği. Linux'ta bu değerler sabittir; arayüz kendi fontunu kullanır.
 //!
 //! `WM_SETTINGCHANGE` / `WM_THEMECHANGED` geldiğinde `mark_dirty()` çağrılır; `App::update`
-//! bir sonraki karede `take_dirty()` görüp temayı ve ölçeği yeniden uygular.
+//! bir sonraki karede `take_dirty()` görüp temayı yeniden uygular.
 
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::OnceLock;
@@ -48,45 +48,13 @@ mod imp {
         DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
         DWMWCP_ROUND,
     };
-    use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD};
     use windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        SystemParametersInfoW, SPI_GETCLIENTAREAANIMATION,
+        SystemParametersInfoW, SPI_GETCLIENTAREAANIMATION, SPI_GETWHEELSCROLLLINES,
     };
 
     fn wide(s: &str) -> Vec<u16> {
         s.encode_utf16().chain(std::iter::once(0)).collect()
-    }
-
-    /// `HKCU` altındaki bir DWORD değeri; yoksa veya farklı türdeyse `None`.
-    fn dword(path: &str, name: &str) -> Option<u32> {
-        let path = wide(path);
-        let name = wide(name);
-        let mut value = 0u32;
-        let mut size = std::mem::size_of::<u32>() as u32;
-        let rc = unsafe {
-            RegGetValueW(
-                HKEY_CURRENT_USER,
-                path.as_ptr(),
-                name.as_ptr(),
-                RRF_RT_REG_DWORD,
-                std::ptr::null_mut(),
-                &mut value as *mut u32 as *mut c_void,
-                &mut size,
-            )
-        };
-        (rc == 0).then_some(value)
-    }
-
-    /// Windows Ayarlar > Erişilebilirlik > Metin boyutu (100–225).
-    ///
-    /// Bu ayar yalnızca metni büyütür; tüm arayüzü tutarlı büyütmek için egui zoom çarpanı
-    /// olarak uygulanır (satır yükseklikleri, simgeler ve boşluklar da ölçeklenir).
-    pub fn text_scale() -> f32 {
-        dword(r"Software\Microsoft\Accessibility", "TextScaleFactor")
-            .filter(|v| (100..=225).contains(v))
-            .map(|v| v as f32 / 100.0)
-            .unwrap_or(1.0)
     }
 
     /// Ayarlar > Erişilebilirlik > Görsel efektler > Animasyonlar.
@@ -123,6 +91,79 @@ mod imp {
         }
     }
 
+    /// Windows "Metin boyutu" ayarı (Ayarlar > Erişilebilirlik > Metin boyutu), 100 = %100.
+    /// Explorer ve diğer Win32 uygulamaları bu ayarı arayüzlerine uygular; bulunamazsa 1.0.
+    pub fn text_scale() -> f32 {
+        use windows_sys::Win32::System::Registry::{
+            RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD,
+        };
+        let key = wide("Software\\Microsoft\\Accessibility");
+        let value = wide("TextScaleFactor");
+        let mut data: u32 = 100;
+        let mut len = std::mem::size_of::<u32>() as u32;
+        let rc = unsafe {
+            RegGetValueW(
+                HKEY_CURRENT_USER,
+                key.as_ptr(),
+                value.as_ptr(),
+                RRF_RT_REG_DWORD,
+                std::ptr::null_mut(),
+                &mut data as *mut u32 as *mut c_void,
+                &mut len,
+            )
+        };
+        if rc != 0 {
+            return 1.0;
+        }
+        (data as f32 / 100.0).clamp(1.0, 2.25)
+    }
+
+    /// Sistemin ileti (message) yazı tipi yüksekliği, piksel cinsinden.
+    ///
+    /// `SPI_GETNONCLIENTMETRICS` değerleri DPI **ve** Windows "Metin boyutu"
+    /// ayarını birlikte yansıtır; %100 ölçekte 12, %162'de 19 döner. Explorer
+    /// liste/gezinme yazısını bu boyda çizer. Alınamazsa `None`.
+    pub fn message_font_px() -> Option<f32> {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            SystemParametersInfoW, NONCLIENTMETRICSW, SPI_GETNONCLIENTMETRICS,
+        };
+        let mut ncm: NONCLIENTMETRICSW = unsafe { std::mem::zeroed() };
+        ncm.cbSize = std::mem::size_of::<NONCLIENTMETRICSW>() as u32;
+        let ok = unsafe {
+            SystemParametersInfoW(
+                SPI_GETNONCLIENTMETRICS,
+                ncm.cbSize,
+                &mut ncm as *mut _ as *mut c_void,
+                0,
+            )
+        };
+        if ok == 0 {
+            return None;
+        }
+        let height = ncm.lfMessageFont.lfHeight.unsigned_abs() as f32;
+        (height >= 6.0).then_some(height)
+    }
+
+    /// Windows "Fare tekerleği bir diş döndürüldüğünde kaç satır kaydırılsın"
+    /// ayarı (SPI_GETWHEELSCROLLLINES, Ayarlar > Bluetooth ve cihazlar > Fare).
+    /// u32::MAX (-1) "bir sayfa" demektir; kabaca beş satır diyelim.
+    /// Alınamazsa Windows'un varsayılanı olan 3 döner.
+    pub fn wheel_scroll_lines() -> u32 {
+        let mut lines: u32 = 3;
+        let ok = unsafe {
+            SystemParametersInfoW(
+                SPI_GETWHEELSCROLLLINES,
+                0,
+                &mut lines as *mut u32 as *mut c_void,
+                0,
+            )
+        };
+        if ok == 0 || lines == u32::MAX {
+            return 5;
+        }
+        lines.clamp(1, 12)
+    }
+
     /// Yuvarlatılmış köşeler ve koyu pencere çerçevesi.
     ///
     /// `DWMWA_USE_IMMERSIVE_DARK_MODE` özel başlık çubuğu kullanan pencerelerde ince
@@ -155,10 +196,6 @@ mod imp {
 
 #[cfg(not(windows))]
 mod imp {
-    pub fn text_scale() -> f32 {
-        1.0
-    }
-
     pub fn animations() -> bool {
         true
     }
@@ -166,6 +203,21 @@ mod imp {
     pub fn apply_dpi_awareness() {}
 
     pub fn set_app_id() {}
+
+    /// Linux'ta metin ölçeği ayrı bir ayar değil; masaüstü ölçeği DPI'ya yansır.
+    pub fn text_scale() -> f32 {
+        1.0
+    }
+
+    /// Linux'ta sistem yazı tipi metriği pencerelerden alınmaz.
+    pub fn message_font_px() -> Option<f32> {
+        None
+    }
+
+    /// Linux'ta tekerlek ayari okunmaz; Explorer'in varsayilani.
+    pub fn wheel_scroll_lines() -> u32 {
+        3
+    }
 
     pub fn apply_backdrop(_dark: bool) {}
 }

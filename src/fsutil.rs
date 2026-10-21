@@ -39,7 +39,10 @@ pub fn attributes(path: &Path, md: &fs::Metadata) -> u32 {
     } else if md.is_dir() {
         a |= ATTR_DIR;
     }
-    if path.file_name().is_some_and(|n| n.as_encoded_bytes().first() == Some(&b'.')) {
+    if path
+        .file_name()
+        .is_some_and(|n| n.as_encoded_bytes().first() == Some(&b'.'))
+    {
         a |= ATTR_HIDDEN;
     }
     a
@@ -78,7 +81,9 @@ impl Entry {
         let ext = if is_dir {
             String::new()
         } else {
-            path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default()
+            path.extension()
+                .map(|e| e.to_string_lossy().to_lowercase())
+                .unwrap_or_default()
         };
         Entry {
             name_lower: name.to_lowercase(),
@@ -90,7 +95,9 @@ impl Entry {
             created: md.created().ok(),
             hidden: is_hidden_attr(attrs),
             ext,
-            plain_dir: cfg!(windows) && is_dir && attrs & (ATTR_READONLY | ATTR_SYSTEM | ATTR_REPARSE) == 0,
+            plain_dir: cfg!(windows)
+                && is_dir
+                && attrs & (ATTR_READONLY | ATTR_SYSTEM | ATTR_REPARSE) == 0,
         }
     }
 }
@@ -127,7 +134,9 @@ pub fn natural_cmp(a: &str, b: &str) -> Ordering {
             };
             let (sa, ea) = digits(a, i);
             let (sb, eb) = digits(b, j);
-            let o = (ea - sa).cmp(&(eb - sb)).then_with(|| a[sa..ea].cmp(&b[sb..eb]));
+            let o = (ea - sa)
+                .cmp(&(eb - sb))
+                .then_with(|| a[sa..ea].cmp(&b[sb..eb]));
             if o != Ordering::Equal {
                 return o;
             }
@@ -176,9 +185,15 @@ impl Pattern {
     pub fn new(q: &str) -> Pattern {
         let q = q.trim().to_lowercase();
         if q.contains('*') || q.contains('?') {
-            Pattern { glob: Some(q.chars().collect()), words: vec![] }
+            Pattern {
+                glob: Some(q.chars().collect()),
+                words: vec![],
+            }
         } else {
-            Pattern { glob: None, words: q.split_whitespace().map(str::to_owned).collect() }
+            Pattern {
+                glob: None,
+                words: q.split_whitespace().map(str::to_owned).collect(),
+            }
         }
     }
 
@@ -231,19 +246,36 @@ pub fn format_size(n: u64) -> String {
         v /= 1024.0;
         i += 1;
     }
-    let s = if v < 10.0 { format!("{v:.2}") } else if v < 100.0 { format!("{v:.1}") } else { format!("{v:.0}") };
+    let s = if v < 10.0 {
+        format!("{v:.2}")
+    } else if v < 100.0 {
+        format!("{v:.1}")
+    } else {
+        format!("{v:.0}")
+    };
     format!("{} {}", s.replace('.', ","), U[i])
 }
 
 pub fn format_time(t: Option<SystemTime>) -> String {
     match t {
-        Some(t) => chrono::DateTime::<chrono::Local>::from(t).format("%d.%m.%Y %H:%M").to_string(),
+        Some(t) => chrono::DateTime::<chrono::Local>::from(t)
+            .format("%d.%m.%Y %H:%M")
+            .to_string(),
         None => String::new(),
     }
 }
 
 /// Explorer'ın "Değiştirme tarihi"ne göre grup adları, en yeniden en eskiye
-pub const DATE_GROUPS: [&str; 8] = ["Bugün", "Dün", "Bu haftanın başlarında", "Geçen hafta", "Bu ayın başlarında", "Geçen ay", "Bu yılın başlarında", "Uzun zaman önce"];
+pub const DATE_GROUPS: [&str; 8] = [
+    "Bugün",
+    "Dün",
+    "Bu haftanın başlarında",
+    "Geçen hafta",
+    "Bu ayın başlarında",
+    "Geçen ay",
+    "Bu yılın başlarında",
+    "Uzun zaman önce",
+];
 
 /// `DATE_GROUPS` içindeki sıra
 pub fn date_group(t: Option<SystemTime>, now: chrono::DateTime<chrono::Local>) -> u8 {
@@ -289,7 +321,10 @@ pub fn kind_label(e: &Entry) -> String {
 }
 
 pub fn is_image(ext: &str) -> bool {
-    matches!(ext, "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "ico" | "svg")
+    matches!(
+        ext,
+        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "ico" | "svg"
+    )
 }
 
 pub fn icon(e: &Entry) -> &'static str {
@@ -305,8 +340,9 @@ pub fn icon(e: &Entry) -> &'static str {
         "pdf" => "📕",
         "doc" | "docx" | "odt" | "rtf" | "xls" | "xlsx" | "csv" | "ppt" | "pptx" => "📊",
         "lnk" | "url" => "🔗",
-        "txt" | "md" | "log" | "ini" | "cfg" | "json" | "toml" | "yaml" | "yml" | "xml" | "html" | "css"
-        | "js" | "ts" | "rs" | "py" | "c" | "cpp" | "h" | "cs" | "java" | "go" | "lua" | "sh" => "📝",
+        "txt" | "md" | "log" | "ini" | "cfg" | "json" | "toml" | "yaml" | "yml" | "xml"
+        | "html" | "css" | "js" | "ts" | "rs" | "py" | "c" | "cpp" | "h" | "cs" | "java" | "go"
+        | "lua" | "sh" => "📝",
         _ => "📄",
     }
 }
@@ -346,6 +382,65 @@ fn take_prefetch(path: &Path) -> Option<Receiver<LoadMsg>> {
     }
 }
 
+/// Galeri: `Pictures` ağacındaki resim ve videolar (Windows 11 "Galeri" sayfası).
+/// Sonuçlar değiştirilme tarihine göre yeniden eskiye sıralanır; sekme bunları
+/// ay bazında gruplar.
+pub fn spawn_gallery(ctx: egui::Context) -> Receiver<LoadMsg> {
+    let (tx, rx) = channel();
+    thread::spawn(move || {
+        let mut out = Vec::new();
+        if let Some(root) = dirs::picture_dir() {
+            collect_gallery(&root, 0, &mut out);
+        }
+        out.sort_by_key(|e| std::cmp::Reverse(e.modified));
+        out.truncate(5000);
+        let _ = tx.send(LoadMsg::Batch(out));
+        let _ = tx.send(LoadMsg::Done);
+        ctx.request_repaint();
+    });
+    rx
+}
+
+fn collect_gallery(dir: &Path, depth: usize, out: &mut Vec<Entry>) {
+    if depth > 6 || out.len() >= 5000 {
+        return;
+    }
+    let Ok(rd) = fs::read_dir(dir) else { return };
+    for de in rd.flatten() {
+        let path = de.path();
+        let Ok(md) = de.metadata() else { continue };
+        let attrs = attributes(&path, &md);
+        if is_hidden_attr(attrs) {
+            continue;
+        }
+        if md.is_dir() {
+            if attrs & ATTR_REPARSE == 0 {
+                collect_gallery(&path, depth + 1, out);
+            }
+        } else if is_gallery_ext(&path) {
+            out.push(Entry::from_metadata(path, &md));
+            if out.len() >= 5000 {
+                return;
+            }
+        }
+    }
+}
+
+fn is_gallery_ext(path: &Path) -> bool {
+    const IMAGE: &[&str] = &[
+        "jpg", "jpeg", "png", "gif", "bmp", "webp", "tif", "tiff", "heic", "heif", "avif", "jxl",
+    ];
+    const VIDEO: &[&str] = &[
+        "mp4", "mov", "m4v", "avi", "mkv", "wmv", "webm", "3gp", "mpg", "mpeg",
+    ];
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    IMAGE.contains(&ext.as_str()) || VIDEO.contains(&ext.as_str())
+}
+
 fn spawn_load_with(path: PathBuf, repaint: impl Fn() + Send + 'static) -> Receiver<LoadMsg> {
     let (tx, rx) = channel();
     thread::spawn(move || {
@@ -363,7 +458,9 @@ fn spawn_load_with(path: PathBuf, repaint: impl Fn() + Send + 'static) -> Receiv
             if let Ok(md) = de.metadata() {
                 batch.push(Entry::from_metadata(de.path(), &md));
             }
-            if batch.len() >= 8192 || (last.elapsed() > Duration::from_millis(60) && !batch.is_empty()) {
+            if batch.len() >= 8192
+                || (last.elapsed() > Duration::from_millis(60) && !batch.is_empty())
+            {
                 if tx.send(LoadMsg::Batch(std::mem::take(&mut batch))).is_err() {
                     return;
                 }
@@ -397,14 +494,26 @@ pub fn spawn_search(roots: Vec<PathBuf>, pattern: Pattern, ctx: egui::Context) -
     let scanned = Arc::new(AtomicU64::new(0));
     let (c, s) = (cancel.clone(), scanned.clone());
     thread::spawn(move || {
-        roots.par_iter().for_each(|r| search_dir(r, &pattern, &tx, &c, &s));
+        roots
+            .par_iter()
+            .for_each(|r| search_dir(r, &pattern, &tx, &c, &s));
         let _ = tx.send(SearchMsg::Done);
         ctx.request_repaint();
     });
-    SearchHandle { rx, cancel, scanned }
+    SearchHandle {
+        rx,
+        cancel,
+        scanned,
+    }
 }
 
-fn search_dir(dir: &Path, pat: &Pattern, tx: &Sender<SearchMsg>, cancel: &AtomicBool, scanned: &AtomicU64) {
+fn search_dir(
+    dir: &Path,
+    pat: &Pattern,
+    tx: &Sender<SearchMsg>,
+    cancel: &AtomicBool,
+    scanned: &AtomicU64,
+) {
     if cancel.load(Relaxed) {
         return;
     }
@@ -428,7 +537,9 @@ fn search_dir(dir: &Path, pat: &Pattern, tx: &Sender<SearchMsg>, cancel: &Atomic
         cancel.store(true, Relaxed);
         return;
     }
-    subdirs.par_iter().for_each(|d| search_dir(d, pat, tx, cancel, scanned));
+    subdirs
+        .par_iter()
+        .for_each(|d| search_dir(d, pat, tx, cancel, scanned));
 }
 
 // ---------------------------------------------------------------- klasör boyutu
@@ -472,7 +583,9 @@ pub struct TreeStats {
 /// `path` bir dosyaysa onu, klasörse içindekileri sayar. Sembolik bağlantılar izlenmez.
 #[cfg(not(windows))]
 pub fn scan_tree(path: &Path, st: &TreeStats) {
-    let Ok(md) = fs::symlink_metadata(path) else { return };
+    let Ok(md) = fs::symlink_metadata(path) else {
+        return;
+    };
     if md.is_dir() {
         scan_dir(path, st);
     } else {
@@ -542,7 +655,11 @@ pub fn user_name(uid: u32) -> Option<String> {
     if rc != 0 || res.is_null() {
         return None;
     }
-    Some(unsafe { std::ffi::CStr::from_ptr(pwd.pw_name) }.to_string_lossy().into_owned())
+    Some(
+        unsafe { std::ffi::CStr::from_ptr(pwd.pw_name) }
+            .to_string_lossy()
+            .into_owned(),
+    )
 }
 
 #[cfg(not(windows))]
@@ -554,7 +671,11 @@ pub fn group_name(gid: u32) -> Option<String> {
     if rc != 0 || res.is_null() {
         return None;
     }
-    Some(unsafe { std::ffi::CStr::from_ptr(grp.gr_name) }.to_string_lossy().into_owned())
+    Some(
+        unsafe { std::ffi::CStr::from_ptr(grp.gr_name) }
+            .to_string_lossy()
+            .into_owned(),
+    )
 }
 
 // ---------------------------------------------------------------- işler (kopyala/taşı/sil/boyut)
@@ -630,7 +751,10 @@ impl Job {
     }
     fn interrupted(&self) -> io::Result<()> {
         if self.cancel.load(Relaxed) {
-            Err(io::Error::new(io::ErrorKind::Interrupted, crate::i18n::t("iptal edildi")))
+            Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                crate::i18n::t("iptal edildi"),
+            ))
         } else {
             Ok(())
         }
@@ -648,12 +772,20 @@ pub fn unique_destination(dir: &Path, name: &str, is_dir: bool) -> PathBuf {
         (name.to_string(), String::new())
     } else {
         (
-            p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_else(|| name.into()),
-            p.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default(),
+            p.file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| name.into()),
+            p.extension()
+                .map(|e| format!(".{}", e.to_string_lossy()))
+                .unwrap_or_default(),
         )
     };
     for n in 1.. {
-        let suffix = if n == 1 { crate::i18n::t(" - Kopya").to_string() } else { crate::i18n::tf(" - Kopya ({})", &[&n]) };
+        let suffix = if n == 1 {
+            crate::i18n::t(" - Kopya").to_string()
+        } else {
+            crate::i18n::tf(" - Kopya ({})", &[&n])
+        };
         let c = dir.join(format!("{stem}{suffix}{ext}"));
         if !c.exists() {
             return c;
@@ -690,7 +822,11 @@ fn copy_tree(src: &Path, dst: &Path, job: &Job, written: &mut Vec<PathBuf>) -> i
             }
         }
     } else {
-        *job.current.lock().unwrap() = src.file_name().unwrap_or_default().to_string_lossy().into_owned();
+        *job.current.lock().unwrap() = src
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned();
         let len = md.len();
         if len < 32 * 1024 * 1024 {
             fs::copy(src, dst)?; // CopyFileExW: küçük dosyalar için en hızlısı
@@ -727,7 +863,10 @@ fn copy_tree(src: &Path, dst: &Path, job: &Job, written: &mut Vec<PathBuf>) -> i
 /// dosyalar yarım ya da boş kalır.
 #[cfg(windows)]
 fn sync_to_disk(written: &[PathBuf], _dest: &Path) -> Vec<String> {
-    written.par_iter().filter_map(|f| flush_file(f).err().map(|e| format!("{}: {e}", f.display()))).collect()
+    written
+        .par_iter()
+        .filter_map(|f| flush_file(f).err().map(|e| format!("{}: {e}", f.display())))
+        .collect()
 }
 
 /// FlushFileBuffers yazma izni ister; salt okunur dosyada öznitelik geçici olarak kaldırılır.
@@ -764,22 +903,47 @@ fn sync_to_disk(_written: &[PathBuf], dest: &Path) -> Vec<String> {
     if unsafe { libc::syncfs(d.as_raw_fd()) } == 0 {
         vec![]
     } else {
-        vec![format!("{}: {}", dest.display(), io::Error::last_os_error())]
+        vec![format!(
+            "{}: {}",
+            dest.display(),
+            io::Error::last_os_error()
+        )]
     }
 }
 
-pub fn spawn_transfer(srcs: Vec<PathBuf>, dest: PathBuf, cut: bool, conflict: Conflict, ctx: egui::Context) -> Arc<Job> {
-    let verb = if cut { crate::i18n::t("Taşınıyor") } else { crate::i18n::t("Kopyalanıyor") };
-    let dest_name = dest.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| dest.to_string_lossy().into_owned());
-    let mut job = Job::new(crate::i18n::tf("{}: {} öğe → {}", &[&verb, &srcs.len(), &dest_name]), JobKind::Transfer);
+pub fn spawn_transfer(
+    srcs: Vec<PathBuf>,
+    dest: PathBuf,
+    cut: bool,
+    conflict: Conflict,
+    ctx: egui::Context,
+) -> Arc<Job> {
+    let verb = if cut {
+        crate::i18n::t("Taşınıyor")
+    } else {
+        crate::i18n::t("Kopyalanıyor")
+    };
+    let dest_name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| dest.to_string_lossy().into_owned());
+    let mut job = Job::new(
+        crate::i18n::tf("{}: {} öğe → {}", &[&verb, &srcs.len(), &dest_name]),
+        JobKind::Transfer,
+    );
     Arc::get_mut(&mut job).unwrap().cut = cut;
     let j = job.clone();
     thread::spawn(move || {
         let mut remaining = Vec::new();
         for s in srcs {
-            let Some(name) = s.file_name().map(|n| n.to_string_lossy().into_owned()) else { continue };
+            let Some(name) = s.file_name().map(|n| n.to_string_lossy().into_owned()) else {
+                continue;
+            };
             if dest.starts_with(&s) {
-                j.err(crate::i18n::tf("{}: klasör kendi içine kopyalanamaz", &[&name]));
+                j.err(crate::i18n::tf(
+                    "{}: klasör kendi içine kopyalanamaz",
+                    &[&name],
+                ));
                 continue;
             }
             let same_dir = s.parent() == Some(dest.as_path());
@@ -807,7 +971,10 @@ pub fn spawn_transfer(srcs: Vec<PathBuf>, dest: PathBuf, cut: bool, conflict: Co
             }
             remaining.push((s, target));
         }
-        let total: u64 = remaining.par_iter().map(|(s, _)| tree_size(s, &j.cancel)).sum();
+        let total: u64 = remaining
+            .par_iter()
+            .map(|(s, _)| tree_size(s, &j.cancel))
+            .sum();
         j.total.store(total, Relaxed);
         let mut written = Vec::new();
         let mut copied = Vec::new();
@@ -831,7 +998,11 @@ pub fn spawn_transfer(srcs: Vec<PathBuf>, dest: PathBuf, cut: bool, conflict: Co
                 if !synced {
                     continue;
                 }
-                let r = if s.is_dir() { fs::remove_dir_all(&s) } else { fs::remove_file(&s) };
+                let r = if s.is_dir() {
+                    fs::remove_dir_all(&s)
+                } else {
+                    fs::remove_file(&s)
+                };
                 if let Err(e) = r {
                     j.err(format!("{}: {e}", s.display()));
                 }
@@ -860,16 +1031,27 @@ pub fn restore_from_trash(paths: &[PathBuf]) -> Result<(), String> {
     let low = |p: &Path| p.to_string_lossy().to_lowercase();
     // Çöp kutusu öğe adını "görünen ad"dan verir: uzantılar gizliyse "dosya.txt" → "dosya".
     let matches = |it: &trash::TrashItem, p: &Path| -> bool {
-        let parent_ok = p.parent().map(|pp| low(pp) == low(&it.original_parent)).unwrap_or(false);
+        let parent_ok = p
+            .parent()
+            .map(|pp| low(pp) == low(&it.original_parent))
+            .unwrap_or(false);
         let name = it.name.to_string_lossy().to_lowercase();
-        let full = p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
-        let stem = p.file_stem().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_default();
+        let full = p
+            .file_name()
+            .map(|n| n.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        let stem = p
+            .file_stem()
+            .map(|n| n.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
         parent_ok && (name == full || name == stem)
     };
     let mut picked: HashMap<PathBuf, trash::TrashItem> = HashMap::new();
     for it in items {
         if let Some(p) = paths.iter().find(|p| matches(&it, p)) {
-            let newer = picked.get(p).is_none_or(|old| old.time_deleted < it.time_deleted);
+            let newer = picked
+                .get(p)
+                .is_none_or(|old| old.time_deleted < it.time_deleted);
             if newer {
                 picked.insert(p.clone(), it);
             }
@@ -882,8 +1064,15 @@ pub fn restore_from_trash(paths: &[PathBuf]) -> Result<(), String> {
 }
 
 pub fn spawn_delete(paths: Vec<PathBuf>, permanent: bool, ctx: egui::Context) -> Arc<Job> {
-    let label = if permanent { crate::i18n::t("Kalıcı siliniyor") } else { crate::i18n::t("Geri dönüşüm kutusuna") };
-    let mut job = Job::new(crate::i18n::tf("{}: {} öğe", &[&label, &paths.len()]), JobKind::Delete);
+    let label = if permanent {
+        crate::i18n::t("Kalıcı siliniyor")
+    } else {
+        crate::i18n::t("Geri dönüşüm kutusuna")
+    };
+    let mut job = Job::new(
+        crate::i18n::tf("{}: {} öğe", &[&label, &paths.len()]),
+        JobKind::Delete,
+    );
     Arc::get_mut(&mut job).unwrap().permanent = permanent;
     let j = job.clone();
     thread::spawn(move || {
@@ -893,8 +1082,16 @@ pub fn spawn_delete(paths: Vec<PathBuf>, permanent: bool, ctx: egui::Context) ->
                 if j.cancel.load(Relaxed) {
                     break;
                 }
-                *j.current.lock().unwrap() = p.file_name().unwrap_or_default().to_string_lossy().into_owned();
-                let r = if p.is_dir() { fs::remove_dir_all(p) } else { fs::remove_file(p) };
+                *j.current.lock().unwrap() = p
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned();
+                let r = if p.is_dir() {
+                    fs::remove_dir_all(p)
+                } else {
+                    fs::remove_file(p)
+                };
                 if let Err(e) = r {
                     j.err(format!("{}: {e}", p.display()));
                 }
@@ -904,7 +1101,10 @@ pub fn spawn_delete(paths: Vec<PathBuf>, permanent: bool, ctx: egui::Context) ->
             j.err(e.to_string());
         } else {
             j.done.store(paths.len() as u64, Relaxed);
-            j.pairs.lock().unwrap().extend(paths.iter().map(|p| (p.clone(), p.clone())));
+            j.pairs
+                .lock()
+                .unwrap()
+                .extend(paths.iter().map(|p| (p.clone(), p.clone())));
         }
         j.finish();
         ctx.request_repaint();
@@ -912,13 +1112,24 @@ pub fn spawn_delete(paths: Vec<PathBuf>, permanent: bool, ctx: egui::Context) ->
     job
 }
 
-pub fn spawn_sizes(dirs: Vec<PathBuf>, out: Arc<Mutex<HashMap<PathBuf, u64>>>, ctx: egui::Context) -> Arc<Job> {
-    let job = Job::new(crate::i18n::tf("Boyut hesaplanıyor: {} klasör", &[&dirs.len()]), JobKind::Size);
+pub fn spawn_sizes(
+    dirs: Vec<PathBuf>,
+    out: Arc<Mutex<HashMap<PathBuf, u64>>>,
+    ctx: egui::Context,
+) -> Arc<Job> {
+    let job = Job::new(
+        crate::i18n::tf("Boyut hesaplanıyor: {} klasör", &[&dirs.len()]),
+        JobKind::Size,
+    );
     let j = job.clone();
     thread::spawn(move || {
         j.total.store(dirs.len() as u64, Relaxed);
         for d in dirs {
-            *j.current.lock().unwrap() = d.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            *j.current.lock().unwrap() = d
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
             let s = dir_size(&d, &j.cancel);
             if j.cancel.load(Relaxed) {
                 break;
@@ -934,7 +1145,10 @@ pub fn spawn_sizes(dirs: Vec<PathBuf>, out: Arc<Mutex<HashMap<PathBuf, u64>>>, c
 }
 
 pub fn spawn_restore(paths: Vec<PathBuf>, ctx: egui::Context) -> Arc<Job> {
-    let job = Job::new(crate::i18n::tf("Geri yükleniyor: {} öğe", &[&paths.len()]), JobKind::Restore);
+    let job = Job::new(
+        crate::i18n::tf("Geri yükleniyor: {} öğe", &[&paths.len()]),
+        JobKind::Restore,
+    );
     let j = job.clone();
     thread::spawn(move || {
         if let Err(e) = restore_from_trash(&paths) {
@@ -951,8 +1165,26 @@ pub fn has_thumbnail(ext: &str) -> bool {
     is_image(ext)
         || matches!(
             ext,
-            "mp4" | "mkv" | "avi" | "mov" | "wmv" | "webm" | "m4v" | "pdf" | "heic" | "avif" | "tif" | "tiff" | "psd"
-                | "cr2" | "nef" | "arw" | "dng" | "mp3" | "flac" | "m4a"
+            "mp4"
+                | "mkv"
+                | "avi"
+                | "mov"
+                | "wmv"
+                | "webm"
+                | "m4v"
+                | "pdf"
+                | "heic"
+                | "avif"
+                | "tif"
+                | "tiff"
+                | "psd"
+                | "cr2"
+                | "nef"
+                | "arw"
+                | "dng"
+                | "mp3"
+                | "flac"
+                | "m4a"
         )
 }
 
@@ -977,7 +1209,10 @@ pub fn read_preview(path: &Path) -> PreviewData {
     buf.truncate(n);
     // UTF-16 LE BOM
     if buf.starts_with(&[0xFF, 0xFE]) {
-        let u: Vec<u16> = buf[2..].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        let u: Vec<u16> = buf[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
         return PreviewData::Text(String::from_utf16_lossy(&u));
     }
     if buf.iter().take(8192).any(|&b| b == 0) {
@@ -1005,7 +1240,8 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn tree_stats_count_files_dirs_and_size() {
-        let root = std::env::temp_dir().join(format!("swift-explorer-props-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("swift-explorer-props-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("a/b")).unwrap();
         fs::write(root.join("one.txt"), [0u8; 10]).unwrap();
@@ -1018,7 +1254,14 @@ mod tests {
         assert_eq!(st.size.load(Relaxed), 60);
         let single = TreeStats::default();
         scan_tree(&root.join("one.txt"), &single);
-        assert_eq!((single.files.load(Relaxed), single.dirs.load(Relaxed), single.size.load(Relaxed)), (1, 0, 10));
+        assert_eq!(
+            (
+                single.files.load(Relaxed),
+                single.dirs.load(Relaxed),
+                single.size.load(Relaxed)
+            ),
+            (1, 0, 10)
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -1069,16 +1312,35 @@ mod tests {
             seed
         };
         let mut words = vec![
-            "dosya2".to_string(), "dosya10".into(), "dosya010".into(), "dosya0010".into(), "a".into(), "".into(),
-            "a1b2".into(), "a01b2".into(), "a1b02".into(), "x9".into(), "x09".into(), "x0".into(), "x".into(),
+            "dosya2".to_string(),
+            "dosya10".into(),
+            "dosya010".into(),
+            "dosya0010".into(),
+            "a".into(),
+            "".into(),
+            "a1b2".into(),
+            "a01b2".into(),
+            "a1b02".into(),
+            "x9".into(),
+            "x09".into(),
+            "x0".into(),
+            "x".into(),
         ];
         for _ in 0..3000 {
             let n = (rnd() % 10) as usize;
-            words.push((0..n).map(|_| alphabet[(rnd() % alphabet.len() as u64) as usize]).collect());
+            words.push(
+                (0..n)
+                    .map(|_| alphabet[(rnd() % alphabet.len() as u64) as usize])
+                    .collect(),
+            );
         }
         for a in &words {
             for b in words.iter().step_by(7) {
-                assert_eq!(natural_cmp(a, b), natural_cmp_reference(a, b), "{a:?} <> {b:?}");
+                assert_eq!(
+                    natural_cmp(a, b),
+                    natural_cmp_reference(a, b),
+                    "{a:?} <> {b:?}"
+                );
             }
         }
     }
@@ -1087,7 +1349,15 @@ mod tests {
     fn natural_cmp_large_sort_is_fast() {
         // WinSxS benzeri adlar: çok sayıda sayı parçası
         let names: Vec<String> = (0..15000)
-            .map(|i| format!("amd64_microsoft-windows-{}_31bf3856ad364e35_10.0.{}.{}_none_{:x}", i % 97, 22621 + i % 13, i, i * 7919))
+            .map(|i| {
+                format!(
+                    "amd64_microsoft-windows-{}_31bf3856ad364e35_10.0.{}.{}_none_{:x}",
+                    i % 97,
+                    22621 + i % 13,
+                    i,
+                    i * 7919
+                )
+            })
             .collect();
         let t = std::time::Instant::now();
         let mut v: Vec<&String> = names.iter().collect();
@@ -1113,7 +1383,13 @@ mod tests {
         perm.set_readonly(true);
         fs::set_permissions(&ro, perm).unwrap();
 
-        let job = spawn_transfer(vec![src.join("klasör")], dest.clone(), false, Conflict::Replace, egui::Context::default());
+        let job = spawn_transfer(
+            vec![src.join("klasör")],
+            dest.clone(),
+            false,
+            Conflict::Replace,
+            egui::Context::default(),
+        );
         while !job.finished.load(Relaxed) {
             thread::sleep(Duration::from_millis(10));
         }

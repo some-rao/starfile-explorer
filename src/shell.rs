@@ -8,37 +8,44 @@ use std::sync::atomic::{AtomicIsize, Ordering};
 
 use windows::core::{implement, Interface, HRESULT, HSTRING, PCSTR, PCWSTR, PSTR, PWSTR};
 use windows::Win32::Foundation::{
-    BOOL, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, HWND, LPARAM, LRESULT, POINT, RECT,
-    SIZE, S_OK, WPARAM,
+    BOOL, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, HWND, LPARAM, LRESULT,
+    POINT, RECT, SIZE, S_OK, WPARAM,
 };
 use windows::Win32::Graphics::Dwm::{DwmGetColorizationColor, DwmSetWindowAttribute, DWMWA_CLOAK};
 use windows::Win32::Graphics::Gdi::{
-    DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
-    DIB_RGB_COLORS, HBITMAP,
+    DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO, BITMAPINFOHEADER,
+    BI_RGB, DIB_RGB_COLORS, HBITMAP,
 };
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
-use windows::Win32::System::Com::{CoInitializeEx, CoTaskMemFree, IDataObject, COINIT_APARTMENTTHREADED};
-use windows::Win32::System::Ole::{DoDragDrop, IDropSource, IDropSource_Impl, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_MOVE, DROPEFFECT_NONE};
+use windows::Win32::System::Com::{
+    CoInitializeEx, CoTaskMemFree, IDataObject, COINIT_APARTMENTTHREADED,
+};
+use windows::Win32::System::Ole::{
+    DoDragDrop, IDropSource, IDropSource_Impl, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK,
+    DROPEFFECT_MOVE, DROPEFFECT_NONE,
+};
 use windows::Win32::System::SystemServices::{MK_LBUTTON, MODIFIERKEYS_FLAGS};
+use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
-    BHID_DataObject, BHID_SFUIObject, DefSubclassProc, IContextMenu, IContextMenu2, IContextMenu3, IShellFolder,
-    IShellItem, IShellItemArray, IShellItemImageFactory, SHCreateItemFromParsingName,
-    SHCreateShellItemArrayFromIDLists, SHGetFileInfoW, SHParseDisplayName, RemoveWindowSubclass, SetWindowSubclass,
-    CMF_CANRENAME, CMF_EXTENDEDVERBS, CMF_NORMAL, CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX, GCS_VERBW, SHFILEINFOW,
-    SHGFI_TYPENAME, SHGFI_USEFILEATTRIBUTES, SIIGBF, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY,
+    BHID_DataObject, BHID_SFUIObject, DefSubclassProc, IContextMenu, IContextMenu2, IContextMenu3,
+    IShellFolder, IShellItem, IShellItemArray, IShellItemImageFactory, RemoveWindowSubclass,
+    SHCreateItemFromParsingName, SHCreateShellItemArrayFromIDLists, SHGetFileInfoW,
+    SHParseDisplayName, SetWindowSubclass, CMF_CANRENAME, CMF_EXTENDEDVERBS, CMF_NORMAL,
+    CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX, GCS_VERBW, SHFILEINFOW, SHGFI_TYPENAME,
+    SHGFI_USEFILEATTRIBUTES, SIIGBF, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY, SIIGBF_THUMBNAILONLY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreatePopupMenu, DestroyMenu, GetAncestor, GetCursorPos, GetMenuItemCount, GetMenuItemInfoW, GetMenuStringW,
-    GetWindowRect, IsZoomed, WindowFromPoint, GA_ROOT, TrackPopupMenuEx, HMENU, HTBOTTOM, HTBOTTOMLEFT,
-    HTBOTTOMRIGHT, HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, MENUITEMINFOW, MENU_ITEM_MASK,
-    MF_BYCOMMAND, MFS_CHECKED, MFS_DISABLED, MFT_SEPARATOR, MIIM_BITMAP, MIIM_FTYPE, MIIM_ID, MIIM_STATE,
-    MIIM_STRING, MIIM_SUBMENU, SW_SHOWNORMAL, TPM_RETURNCMD, TPM_RIGHTBUTTON, WM_NCHITTEST, WM_DRAWITEM,
-    WM_INITMENUPOPUP, WM_MEASUREITEM, WM_MENUCHAR, WM_MENUSELECT, WM_SETTINGCHANGE, WM_THEMECHANGED,
-    CallNextHookEx, SetWindowsHookExW, UnhookWindowsHookEx, CBT_CREATEWNDW, HCBT_CREATEWND, HHOOK, WH_CBT, WS_CHILD,
-    WM_CREATE, WM_SHOWWINDOW,
+    CallNextHookEx, CreatePopupMenu, DestroyMenu, GetAncestor, GetCursorPos, GetMenuItemCount,
+    GetMenuItemInfoW, GetMenuStringW, GetWindowRect, IsZoomed, SetWindowsHookExW, TrackPopupMenuEx,
+    UnhookWindowsHookEx, WindowFromPoint, CBT_CREATEWNDW, GA_ROOT, HCBT_CREATEWND, HHOOK, HMENU,
+    HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT,
+    MENUITEMINFOW, MENU_ITEM_MASK, MFS_CHECKED, MFS_DISABLED, MFT_SEPARATOR, MF_BYCOMMAND,
+    MIIM_BITMAP, MIIM_FTYPE, MIIM_ID, MIIM_STATE, MIIM_STRING, MIIM_SUBMENU, SW_SHOWNORMAL,
+    TPM_RETURNCMD, TPM_RIGHTBUTTON, WH_CBT, WM_CREATE, WM_DRAWITEM, WM_INITMENUPOPUP,
+    WM_MEASUREITEM, WM_MENUCHAR, WM_MENUSELECT, WM_NCHITTEST, WM_SETTINGCHANGE, WM_SHOWWINDOW,
+    WM_THEMECHANGED, WS_CHILD,
 };
-use windows::Win32::System::Threading::GetCurrentThreadId;
 
 pub use crate::images::{ImageCache, Img};
 
@@ -55,6 +62,11 @@ pub fn shell_image(path: &Path, size: i32, icon_only: bool) -> Option<egui::Colo
         let mut flags: SIIGBF = SIIGBF_BIGGERSIZEOK;
         if icon_only {
             flags |= SIIGBF_ICONONLY;
+        } else {
+            // Bayrak yoksa kabuk küçük resim önbellekte değilse sessizce ikonu döndürür;
+            // THUMBNAILONLY küçük resmi çıkarmaya zorlar, olmazsa hata döndürür
+            // (arayüz ikona düşer).
+            flags |= SIIGBF_THUMBNAILONLY;
         }
         let hbm = factory.GetImage(SIZE { cx: size, cy: size }, flags).ok()?;
         let img = hbitmap_to_image(hbm);
@@ -71,7 +83,12 @@ unsafe fn hbitmap_to_image(hbm: HBITMAP) -> Option<egui::ColorImage> {
 /// HBITMAP'in ham 32 bit BGRA pikselleri (yukarıdan aşağı)
 unsafe fn hbitmap_bgra(hbm: HBITMAP) -> Option<(Vec<u8>, usize, usize)> {
     let mut bm = BITMAP::default();
-    if GetObjectW(hbm, std::mem::size_of::<BITMAP>() as i32, Some(&mut bm as *mut _ as *mut c_void)) == 0 {
+    if GetObjectW(
+        hbm,
+        std::mem::size_of::<BITMAP>() as i32,
+        Some(&mut bm as *mut _ as *mut c_void),
+    ) == 0
+    {
         return None;
     }
     let (w, h) = (bm.bmWidth, bm.bmHeight.abs());
@@ -92,7 +109,15 @@ unsafe fn hbitmap_bgra(hbm: HBITMAP) -> Option<(Vec<u8>, usize, usize)> {
     };
     let mut buf = vec![0u8; (w * h * 4) as usize];
     let dc = GetDC(HWND::default());
-    let lines = GetDIBits(dc, hbm, 0, h as u32, Some(buf.as_mut_ptr() as *mut c_void), &mut bi, DIB_RGB_COLORS);
+    let lines = GetDIBits(
+        dc,
+        hbm,
+        0,
+        h as u32,
+        Some(buf.as_mut_ptr() as *mut c_void),
+        &mut bi,
+        DIB_RGB_COLORS,
+    );
     ReleaseDC(HWND::default(), dc);
     if lines == 0 {
         return None;
@@ -106,7 +131,10 @@ fn bgra_to_image(mut buf: Vec<u8>, w: usize, h: usize) -> egui::ColorImage {
     // Shell ikonları çoğu zaman ön-çarpılmamış alfa ile gelir; öyleyse ön-çarpılmış
     // gibi çizmek yarı saydam kenarlarda beyaz hale bırakır. Rengi alfadan büyük
     // bir piksel varsa veri ön-çarpılmamıştır.
-    let straight = !no_alpha && buf.chunks_exact(4).any(|p| p[0] > p[3] || p[1] > p[3] || p[2] > p[3]);
+    let straight = !no_alpha
+        && buf
+            .chunks_exact(4)
+            .any(|p| p[0] > p[3] || p[1] > p[3] || p[2] > p[3]);
     for p in buf.chunks_exact_mut(4) {
         p.swap(0, 2); // BGRA → RGBA
         if no_alpha {
@@ -205,7 +233,11 @@ pub fn end_startup_cloak() {
     let hwnd = STARTUP_HWND.swap(0, Ordering::Relaxed);
     if hwnd != 0 {
         unsafe {
-            let _ = RemoveWindowSubclass(HWND(hwnd as *mut c_void), Some(startup_subclass), STARTUP_SUBCLASS);
+            let _ = RemoveWindowSubclass(
+                HWND(hwnd as *mut c_void),
+                Some(startup_subclass),
+                STARTUP_SUBCLASS,
+            );
         }
     }
 }
@@ -223,7 +255,10 @@ unsafe extern "system" fn cbt_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
     if code == HCBT_CREATEWND as i32 && STARTUP_HWND.load(Ordering::Relaxed) == 0 {
         let cs = &*(*(lp.0 as *const CBT_CREATEWNDW)).lpcs;
         let top_level = cs.hwndParent.is_invalid() && (cs.style & WS_CHILD.0 as i32) == 0;
-        if top_level && !cs.lpszName.is_null() && cs.lpszName.to_string().is_ok_and(|t| t == crate::APP_NAME) {
+        if top_level
+            && !cs.lpszName.is_null()
+            && cs.lpszName.to_string().is_ok_and(|t| t == crate::APP_NAME)
+        {
             let hwnd = HWND(wp.0 as *mut c_void);
             if SetWindowSubclass(hwnd, Some(startup_subclass), STARTUP_SUBCLASS, 0).as_bool() {
                 STARTUP_HWND.store(wp.0 as isize, Ordering::Relaxed);
@@ -237,7 +272,14 @@ unsafe extern "system" fn cbt_proc(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT
     r
 }
 
-unsafe extern "system" fn startup_subclass(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, _id: usize, _data: usize) -> LRESULT {
+unsafe extern "system" fn startup_subclass(
+    hwnd: HWND,
+    msg: u32,
+    wp: WPARAM,
+    lp: LPARAM,
+    _id: usize,
+    _data: usize,
+) -> LRESULT {
     match msg {
         WM_CREATE => {
             let r = DefSubclassProc(hwnd, msg, wp, lp);
@@ -255,7 +297,9 @@ unsafe extern "system" fn startup_subclass(hwnd: HWND, msg: u32, wp: WPARAM, lp:
 /// Sistem ölçeği (ör. %150 → 1.5). Süreci, winit'in de yaptığı gibi monitör başına
 /// DPI farkında yapar; aksi halde Windows her zaman 96 DPI bildirir.
 pub fn system_scale() -> f32 {
-    use windows::Win32::UI::HiDpi::{GetDpiForSystem, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
+    use windows::Win32::UI::HiDpi::{
+        GetDpiForSystem, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+    };
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         GetDpiForSystem().max(96) as f32 / 96.0
@@ -267,7 +311,12 @@ pub fn system_scale() -> f32 {
 pub fn set_cloak(hwnd: isize, cloak: bool) {
     unsafe {
         let v = BOOL::from(cloak);
-        let _ = DwmSetWindowAttribute(HWND(hwnd as *mut c_void), DWMWA_CLOAK, &v as *const BOOL as *const c_void, std::mem::size_of::<BOOL>() as u32);
+        let _ = DwmSetWindowAttribute(
+            HWND(hwnd as *mut c_void),
+            DWMWA_CLOAK,
+            &v as *const BOOL as *const c_void,
+            std::mem::size_of::<BOOL>() as u32,
+        );
     }
 }
 
@@ -279,7 +328,14 @@ pub fn install_subclass(hwnd: isize) {
     }
 }
 
-unsafe extern "system" fn subclass_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM, _id: usize, _data: usize) -> LRESULT {
+unsafe extern "system" fn subclass_proc(
+    hwnd: HWND,
+    msg: u32,
+    wp: WPARAM,
+    lp: LPARAM,
+    _id: usize,
+    _data: usize,
+) -> LRESULT {
     // Metin ölçeği, vurgu rengi, animasyonlar veya tema değişti
     if msg == WM_SETTINGCHANGE || msg == WM_THEMECHANGED {
         crate::system::mark_dirty();
@@ -294,7 +350,10 @@ unsafe extern "system" fn subclass_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LP
         }
         return hit;
     }
-    if matches!(msg, WM_INITMENUPOPUP | WM_DRAWITEM | WM_MEASUREITEM | WM_MENUCHAR | WM_MENUSELECT) {
+    if matches!(
+        msg,
+        WM_INITMENUPOPUP | WM_DRAWITEM | WM_MEASUREITEM | WM_MENUCHAR | WM_MENUSELECT
+    ) {
         let handled = ACTIVE_MENU.with(|m| {
             let m = m.borrow();
             let cm = m.as_ref()?;
@@ -324,10 +383,18 @@ unsafe fn resize_edge(hwnd: HWND, lp: LPARAM) -> Option<u32> {
     }
     let mut r = RECT::default();
     GetWindowRect(hwnd, &mut r).ok()?;
-    let (x, y) = ((lp.0 & 0xFFFF) as i16 as i32, ((lp.0 >> 16) & 0xFFFF) as i16 as i32);
+    let (x, y) = (
+        (lp.0 & 0xFFFF) as i16 as i32,
+        ((lp.0 >> 16) & 0xFFFF) as i16 as i32,
+    );
     let dpi = windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd).max(96) as i32;
     let b = 6 * dpi / 96;
-    let (l, rt, t, bt) = (x < r.left + b, x >= r.right - b, y < r.top + b, y >= r.bottom - b);
+    let (l, rt, t, bt) = (
+        x < r.left + b,
+        x >= r.right - b,
+        y < r.top + b,
+        y >= r.bottom - b,
+    );
     Some(match (l, rt, t, bt) {
         (true, _, true, _) => HTTOPLEFT,
         (_, true, true, _) => HTTOPRIGHT,
@@ -350,9 +417,15 @@ pub enum MenuResult {
 /// Explorer'ın gerçek sağ tık menüsünü imleç konumunda gösterir.
 pub fn context_menu(hwnd: isize, paths: &[PathBuf], extended: bool) -> MenuResult {
     unsafe {
-        let Some((arr, _pidls)) = item_array(paths) else { return MenuResult::None };
-        let Ok(cm) = arr.BindToHandler::<_, IContextMenu>(None, &BHID_SFUIObject) else { return MenuResult::None };
-        let Ok(menu) = CreatePopupMenu() else { return MenuResult::None };
+        let Some((arr, _pidls)) = item_array(paths) else {
+            return MenuResult::None;
+        };
+        let Ok(cm) = arr.BindToHandler::<_, IContextMenu>(None, &BHID_SFUIObject) else {
+            return MenuResult::None;
+        };
+        let Ok(menu) = CreatePopupMenu() else {
+            return MenuResult::None;
+        };
         let mut flags = CMF_NORMAL | CMF_CANRENAME;
         if extended {
             flags |= CMF_EXTENDEDVERBS;
@@ -369,9 +442,15 @@ pub fn context_menu(hwnd: isize, paths: &[PathBuf], extended: bool) -> MenuResul
 /// `context_menu` yalnızca seçili öğeler içindir; o boşken bu kullanılır.
 pub fn background_context_menu(hwnd: isize, folder: &Path, extended: bool) -> MenuResult {
     unsafe {
-        let Ok(item) = SHCreateItemFromParsingName::<_, _, IShellItem>(&hs(folder), None) else { return MenuResult::None };
-        let Ok(folder) = item.BindToHandler::<_, IShellFolder>(None, &BHID_SFUIObject) else { return MenuResult::None };
-        let Ok(menu) = CreatePopupMenu() else { return MenuResult::None };
+        let Ok(item) = SHCreateItemFromParsingName::<_, _, IShellItem>(&hs(folder), None) else {
+            return MenuResult::None;
+        };
+        let Ok(folder) = item.BindToHandler::<_, IShellFolder>(None, &BHID_SFUIObject) else {
+            return MenuResult::None;
+        };
+        let Ok(menu) = CreatePopupMenu() else {
+            return MenuResult::None;
+        };
         let hwnd = HWND(hwnd as *mut c_void);
         let Ok(cm) = folder.CreateViewObject::<_, IContextMenu>(hwnd) else {
             let _ = DestroyMenu(menu);
@@ -394,7 +473,14 @@ unsafe fn run_native(cm: &IContextMenu, menu: HMENU, hwnd: HWND) -> MenuResult {
     let mut pt = POINT::default();
     let _ = GetCursorPos(&mut pt);
     ACTIVE_MENU.with(|m| *m.borrow_mut() = Some(cm.clone()));
-    let cmd = TrackPopupMenuEx(menu, (TPM_RETURNCMD | TPM_RIGHTBUTTON).0, pt.x, pt.y, hwnd, None);
+    let cmd = TrackPopupMenuEx(
+        menu,
+        (TPM_RETURNCMD | TPM_RIGHTBUTTON).0,
+        pt.x,
+        pt.y,
+        hwnd,
+        None,
+    );
     ACTIVE_MENU.with(|m| *m.borrow_mut() = None);
     let _ = DestroyMenu(menu);
     if cmd.0 <= 0 {
@@ -402,7 +488,16 @@ unsafe fn run_native(cm: &IContextMenu, menu: HMENU, hwnd: HWND) -> MenuResult {
     }
     let id = (cmd.0 - 1) as usize;
     let mut verb = [0u16; 64];
-    if cm.GetCommandString(id, GCS_VERBW, None, PSTR(verb.as_mut_ptr() as *mut u8), verb.len() as u32).is_ok() {
+    if cm
+        .GetCommandString(
+            id,
+            GCS_VERBW,
+            None,
+            PSTR(verb.as_mut_ptr() as *mut u8),
+            verb.len() as u32,
+        )
+        .is_ok()
+    {
         let len = verb.iter().position(|&c| c == 0).unwrap_or(0);
         if String::from_utf16_lossy(&verb[..len]).eq_ignore_ascii_case("rename") {
             return MenuResult::Rename;
@@ -437,7 +532,15 @@ pub struct ShellMenuItem {
 
 impl ShellMenuItem {
     fn sep() -> Self {
-        ShellMenuItem { id: 0, label: String::new(), enabled: false, checked: false, separator: true, children: vec![], icon: None }
+        ShellMenuItem {
+            id: 0,
+            label: String::new(),
+            enabled: false,
+            checked: false,
+            separator: true,
+            children: vec![],
+            icon: None,
+        }
     }
 }
 
@@ -461,24 +564,69 @@ impl Drop for ShellMenu {
 /// Windows 11'in modern menüsünde ayrıca gösterdiğimiz komutlar; kabuk bunları
 /// yeniden eklemesin diye elenir.
 const SKIP_VERBS: [&str; 18] = [
-    "open", "openas", "openwith", "runas", "cut", "copy", "paste", "delete", "rename", "properties", "link", "print",
-    "printto", "sendto", "copyaspath", "pintohome", "unpinfromhome", "share",
+    "open",
+    "openas",
+    "openwith",
+    "runas",
+    "cut",
+    "copy",
+    "paste",
+    "delete",
+    "rename",
+    "properties",
+    "link",
+    "print",
+    "printto",
+    "sendto",
+    "copyaspath",
+    "pintohome",
+    "unpinfromhome",
+    "share",
 ];
 
 const SKIP_LABELS: [&str; 24] = [
-    "open", "open with", "cut", "copy", "paste", "delete", "rename", "properties", "send to", "print", "copy as path",
-    "pin to quick access", "unpin from quick access", "open in terminal", "share", "aç", "birlikte aç", "kes",
-    "kopyala", "yapıştır", "sil", "yeniden adlandır", "özellikler", "terminalde aç",
+    "open",
+    "open with",
+    "cut",
+    "copy",
+    "paste",
+    "delete",
+    "rename",
+    "properties",
+    "send to",
+    "print",
+    "copy as path",
+    "pin to quick access",
+    "unpin from quick access",
+    "open in terminal",
+    "share",
+    "aç",
+    "birlikte aç",
+    "kes",
+    "kopyala",
+    "yapıştır",
+    "sil",
+    "yeniden adlandır",
+    "özellikler",
+    "terminalde aç",
 ];
 
 impl ShellMenu {
     /// Gerçek kabuk menüsünü okur. `paths` boşsa klasörün boş alanı için menü kurulur.
-    pub fn build(hwnd: isize, paths: &[PathBuf], background: Option<&Path>, extended: bool) -> Option<ShellMenu> {
+    pub fn build(
+        hwnd: isize,
+        paths: &[PathBuf],
+        background: Option<&Path>,
+        extended: bool,
+    ) -> Option<ShellMenu> {
         unsafe {
             let hwnd = HWND(hwnd as *mut c_void);
             let (cm, menu) = if let Some(folder) = background {
-                let item = SHCreateItemFromParsingName::<_, _, IShellItem>(&hs(folder), None).ok()?;
-                let folder = item.BindToHandler::<_, IShellFolder>(None, &BHID_SFUIObject).ok()?;
+                let item =
+                    SHCreateItemFromParsingName::<_, _, IShellItem>(&hs(folder), None).ok()?;
+                let folder = item
+                    .BindToHandler::<_, IShellFolder>(None, &BHID_SFUIObject)
+                    .ok()?;
                 let cm = folder.CreateViewObject::<_, IContextMenu>(hwnd).ok()?;
                 let menu = CreatePopupMenu().ok()?;
                 if cm.QueryContextMenu(menu, 0, 1, 0x7FFF, CMF_NORMAL).is_err() {
@@ -488,7 +636,9 @@ impl ShellMenu {
                 (cm, menu)
             } else {
                 let (arr, _pidls) = item_array(paths)?;
-                let cm = arr.BindToHandler::<_, IContextMenu>(None, &BHID_SFUIObject).ok()?;
+                let cm = arr
+                    .BindToHandler::<_, IContextMenu>(None, &BHID_SFUIObject)
+                    .ok()?;
                 let menu = CreatePopupMenu().ok()?;
                 let mut flags = CMF_NORMAL | CMF_CANRENAME;
                 if extended {
@@ -506,7 +656,12 @@ impl ShellMenu {
                 let _ = DestroyMenu(menu);
                 return None;
             }
-            Some(ShellMenu { items, cm, menu, hwnd })
+            Some(ShellMenu {
+                items,
+                cm,
+                menu,
+                hwnd,
+            })
         }
     }
 
@@ -536,7 +691,9 @@ impl ShellMenu {
                 ptInvoke: pt,
                 ..Default::default()
             };
-            let _ = self.cm.InvokeCommand(&info as *const _ as *const CMINVOKECOMMANDINFO);
+            let _ = self
+                .cm
+                .InvokeCommand(&info as *const _ as *const CMINVOKECOMMANDINFO);
             MenuResult::Invoked
         }
     }
@@ -544,7 +701,15 @@ impl ShellMenu {
     fn verb(&self, id: u32) -> Option<String> {
         unsafe {
             let mut buf = [0u16; 128];
-            self.cm.GetCommandString((id - 1) as usize, GCS_VERBW, None, PSTR(buf.as_mut_ptr() as *mut u8), buf.len() as u32).ok()?;
+            self.cm
+                .GetCommandString(
+                    (id - 1) as usize,
+                    GCS_VERBW,
+                    None,
+                    PSTR(buf.as_mut_ptr() as *mut u8),
+                    buf.len() as u32,
+                )
+                .ok()?;
             let len = buf.iter().position(|&c| c == 0).unwrap_or(0);
             Some(String::from_utf16_lossy(&buf[..len]).to_lowercase())
         }
@@ -557,7 +722,12 @@ unsafe fn read_menu(cm: &IContextMenu, hmenu: HMENU, depth: usize) -> Vec<ShellM
     let mut out = Vec::new();
     for i in 0..count {
         let mut buf = [0u16; 256];
-        let mask = MIIM_ID.0 | MIIM_STATE.0 | MIIM_FTYPE.0 | MIIM_SUBMENU.0 | MIIM_STRING.0 | MIIM_BITMAP.0;
+        let mask = MIIM_ID.0
+            | MIIM_STATE.0
+            | MIIM_FTYPE.0
+            | MIIM_SUBMENU.0
+            | MIIM_STRING.0
+            | MIIM_BITMAP.0;
         let mut mii = MENUITEMINFOW {
             cbSize: std::mem::size_of::<MENUITEMINFOW>() as u32,
             fMask: MENU_ITEM_MASK(mask),
@@ -584,7 +754,11 @@ unsafe fn read_menu(cm: &IContextMenu, hmenu: HMENU, depth: usize) -> Vec<ShellM
         if label.is_empty() && mii.hSubMenu.is_invalid() {
             continue;
         }
-        let verb = if mii.wID != 0 { Some(command_verb(cm, mii.wID)) } else { None };
+        let verb = if mii.wID != 0 {
+            Some(command_verb(cm, mii.wID))
+        } else {
+            None
+        };
         if let Some(v) = &verb {
             if SKIP_VERBS.contains(&v.as_str()) {
                 continue;
@@ -599,7 +773,11 @@ unsafe fn read_menu(cm: &IContextMenu, hmenu: HMENU, depth: usize) -> Vec<ShellM
         } else {
             vec![]
         };
-        let icon = if !mii.hbmpItem.is_invalid() { hbitmap_to_image(mii.hbmpItem) } else { None };
+        let icon = if !mii.hbmpItem.is_invalid() {
+            hbitmap_to_image(mii.hbmpItem)
+        } else {
+            None
+        };
         out.push(ShellMenuItem {
             id: mii.wID,
             label,
@@ -622,7 +800,16 @@ unsafe fn init_submenu(cm: &IContextMenu, hmenu: HMENU) {
 
 unsafe fn command_verb(cm: &IContextMenu, id: u32) -> String {
     let mut buf = [0u16; 128];
-    if cm.GetCommandString((id - 1) as usize, GCS_VERBW, None, PSTR(buf.as_mut_ptr() as *mut u8), buf.len() as u32).is_err() {
+    if cm
+        .GetCommandString(
+            (id - 1) as usize,
+            GCS_VERBW,
+            None,
+            PSTR(buf.as_mut_ptr() as *mut u8),
+            buf.len() as u32,
+        )
+        .is_err()
+    {
         return String::new();
     }
     let len = buf.iter().position(|&c| c == 0).unwrap_or(0);
@@ -706,11 +893,20 @@ impl IDropSource_Impl for DropSource_Impl {
 /// Bırakılana kadar engeller (Windows'un kendi sürükleme döngüsü).
 pub fn drag_out(paths: &[PathBuf]) -> bool {
     unsafe {
-        let Some((arr, _pidls)) = item_array(paths) else { return false };
-        let Ok(data) = arr.BindToHandler::<_, IDataObject>(None, &BHID_DataObject) else { return false };
+        let Some((arr, _pidls)) = item_array(paths) else {
+            return false;
+        };
+        let Ok(data) = arr.BindToHandler::<_, IDataObject>(None, &BHID_DataObject) else {
+            return false;
+        };
         let source: IDropSource = DropSource.into();
         let mut effect = DROPEFFECT_NONE;
-        let hr = DoDragDrop(&data, &source, DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &mut effect);
+        let hr = DoDragDrop(
+            &data,
+            &source,
+            DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK,
+            &mut effect,
+        );
         hr == DRAGDROP_S_DROP
     }
 }
@@ -735,7 +931,11 @@ pub fn accent_color() -> Option<egui::Color32> {
         let mut c = 0u32;
         let mut opaque = BOOL(0);
         DwmGetColorizationColor(&mut c, &mut opaque).ok()?;
-        Some(egui::Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8))
+        Some(egui::Color32::from_rgb(
+            (c >> 16) as u8,
+            (c >> 8) as u8,
+            c as u8,
+        ))
     }
 }
 
@@ -746,7 +946,10 @@ mod tests {
     /// Ön-çarpılmış pikselde hiçbir renk kanalı alfadan büyük olamaz; olursa
     /// çizimde yarı saydam kenarlar beyaza çalar.
     fn bad_pixels(img: &egui::ColorImage) -> usize {
-        img.pixels.iter().filter(|c| c.r() > c.a() || c.g() > c.a() || c.b() > c.a()).count()
+        img.pixels
+            .iter()
+            .filter(|c| c.r() > c.a() || c.g() > c.a() || c.b() > c.a())
+            .count()
     }
 
     #[test]
@@ -765,18 +968,31 @@ mod tests {
         for f in &files {
             for size in [16, 32, 48, 96, 256] {
                 let raw = unsafe {
-                    let factory: IShellItemImageFactory = SHCreateItemFromParsingName(&hs(Path::new(f)), None).unwrap();
-                    let hbm = factory.GetImage(SIZE { cx: size, cy: size }, SIIGBF_BIGGERSIZEOK | SIIGBF_ICONONLY).unwrap();
+                    let factory: IShellItemImageFactory =
+                        SHCreateItemFromParsingName(&hs(Path::new(f)), None).unwrap();
+                    let hbm = factory
+                        .GetImage(
+                            SIZE { cx: size, cy: size },
+                            SIIGBF_BIGGERSIZEOK | SIIGBF_ICONONLY,
+                        )
+                        .unwrap();
                     let r = hbitmap_bgra(hbm).unwrap();
                     let _ = DeleteObject(hbm);
                     r
                 };
-                let raw_bad = raw.0.chunks_exact(4).filter(|p| p[0] > p[3] || p[1] > p[3] || p[2] > p[3]).count();
+                let raw_bad = raw
+                    .0
+                    .chunks_exact(4)
+                    .filter(|p| p[0] > p[3] || p[1] > p[3] || p[2] > p[3])
+                    .count();
                 if raw_bad > 0 {
                     straight_inputs += 1;
                 }
                 let img = bgra_to_image(raw.0, raw.1, raw.2);
-                println!("{f} @{size}: ham geçersiz piksel {raw_bad} → dönüşümden sonra {}", bad_pixels(&img));
+                println!(
+                    "{f} @{size}: ham geçersiz piksel {raw_bad} → dönüşümden sonra {}",
+                    bad_pixels(&img)
+                );
                 assert_eq!(bad_pixels(&img), 0, "{f} @{size}");
             }
         }

@@ -33,7 +33,12 @@ fn themes() -> &'static [String] {
 fn find_icon(names: &[&str], size: i32) -> Option<PathBuf> {
     for theme in themes() {
         for name in names {
-            if let Some(p) = freedesktop_icons::lookup(name).with_size(size.clamp(16, 512) as u16).with_theme(theme).with_cache().find() {
+            if let Some(p) = freedesktop_icons::lookup(name)
+                .with_size(size.clamp(16, 512) as u16)
+                .with_theme(theme)
+                .with_cache()
+                .find()
+            {
                 return Some(p);
             }
         }
@@ -42,7 +47,9 @@ fn find_icon(names: &[&str], size: i32) -> Option<PathBuf> {
 }
 
 fn load_icon(path: &Path, size: i32) -> Option<egui::ColorImage> {
-    let is_svg = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg") || e.eq_ignore_ascii_case("svgz"));
+    let is_svg = path
+        .extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("svg") || e.eq_ignore_ascii_case("svgz"));
     if is_svg {
         let data = std::fs::read(path).ok()?;
         let tree = resvg::usvg::Tree::from_data(&data, &resvg::usvg::Options::default()).ok()?;
@@ -50,19 +57,38 @@ fn load_icon(path: &Path, size: i32) -> Option<egui::ColorImage> {
         let mut pm = resvg::tiny_skia::Pixmap::new(side, side)?;
         let sz = tree.size();
         let scale = side as f32 / sz.width().max(sz.height());
-        resvg::render(&tree, resvg::tiny_skia::Transform::from_scale(scale, scale), &mut pm.as_mut());
-        Some(egui::ColorImage::from_rgba_premultiplied([side as usize, side as usize], pm.data()))
+        resvg::render(
+            &tree,
+            resvg::tiny_skia::Transform::from_scale(scale, scale),
+            &mut pm.as_mut(),
+        );
+        Some(egui::ColorImage::from_rgba_premultiplied(
+            [side as usize, side as usize],
+            pm.data(),
+        ))
     } else {
         decode(path, size)
     }
 }
 
 fn decode(path: &Path, size: i32) -> Option<egui::ColorImage> {
-    let img = image::ImageReader::open(path).ok()?.with_guessed_format().ok()?.decode().ok()?;
+    let img = image::ImageReader::open(path)
+        .ok()?
+        .with_guessed_format()
+        .ok()?
+        .decode()
+        .ok()?;
     let side = size.max(1) as u32;
-    let img = if img.width() > side || img.height() > side { img.thumbnail(side, side) } else { img };
+    let img = if img.width() > side || img.height() > side {
+        img.thumbnail(side, side)
+    } else {
+        img
+    };
     let rgba = img.to_rgba8();
-    Some(egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw()))
+    Some(egui::ColorImage::from_rgba_unmultiplied(
+        [rgba.width() as usize, rgba.height() as usize],
+        rgba.as_raw(),
+    ))
 }
 
 /// Sanal konumların (Giriş, Bu bilgisayar, Ağ) ve özel klasörlerin tema ikon adları
@@ -80,13 +106,19 @@ fn special_names(path: &Path) -> Option<&'static [&'static str]> {
     let known: [(Option<PathBuf>, &'static [&'static str]); 7] = [
         (dirs::home_dir(), &["user-home", "folder-home"]),
         (dirs::desktop_dir(), &["user-desktop", "folder-desktop"]),
-        (dirs::download_dir(), &["folder-download", "folder-downloads"]),
+        (
+            dirs::download_dir(),
+            &["folder-download", "folder-downloads"],
+        ),
         (dirs::document_dir(), &["folder-documents"]),
         (dirs::picture_dir(), &["folder-pictures", "folder-images"]),
         (dirs::audio_dir(), &["folder-music"]),
         (dirs::video_dir(), &["folder-videos", "folder-video"]),
     ];
-    known.into_iter().find(|(p, _)| p.as_deref() == Some(path)).map(|(_, n)| n)
+    known
+        .into_iter()
+        .find(|(p, _)| p.as_deref() == Some(path))
+        .map(|(_, n)| n)
 }
 
 fn is_mount_point(path: &Path) -> bool {
@@ -101,16 +133,30 @@ pub fn shell_image(path: &Path, size: i32, icon_only: bool) -> Option<egui::Colo
         return load_icon(&find_icon(&v, size)?, size);
     }
     if path.is_dir() {
-        let names: &[&str] = if is_mount_point(path) { &["drive-removable-media", "drive-harddisk", "folder"] } else { &["folder"] };
+        let names: &[&str] = if is_mount_point(path) {
+            &["drive-removable-media", "drive-harddisk", "folder"]
+        } else {
+            &["folder"]
+        };
         return load_icon(&find_icon(names, size)?, size);
     }
-    let ext = path.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-    if !icon_only && matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp") {
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+    if !icon_only
+        && matches!(
+            ext.as_str(),
+            "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp"
+        )
+    {
         if let Some(img) = decode(path, size) {
             return Some(img);
         }
     }
-    let mime = mime_guess::from_ext(&ext).first_raw().unwrap_or("application/octet-stream");
+    let mime = mime_guess::from_ext(&ext)
+        .first_raw()
+        .unwrap_or("application/octet-stream");
     let exact = mime.replace('/', "-");
     let top = mime.split('/').next().unwrap_or("");
     let generic = match top {
@@ -119,11 +165,22 @@ pub fn shell_image(path: &Path, size: i32, icon_only: bool) -> Option<egui::Colo
         "video" => "video-x-generic",
         "text" => "text-x-generic",
         "font" => "font-x-generic",
-        _ if matches!(ext.as_str(), "zip" | "rar" | "7z" | "tar" | "gz" | "xz" | "bz2" | "zst") => "package-x-generic",
-        _ if matches!(ext.as_str(), "sh" | "appimage" | "run" | "bin") => "application-x-executable",
+        _ if matches!(
+            ext.as_str(),
+            "zip" | "rar" | "7z" | "tar" | "gz" | "xz" | "bz2" | "zst"
+        ) =>
+        {
+            "package-x-generic"
+        }
+        _ if matches!(ext.as_str(), "sh" | "appimage" | "run" | "bin") => {
+            "application-x-executable"
+        }
         _ => "text-x-generic",
     };
-    load_icon(&find_icon(&[&exact, generic, "text-x-generic", "unknown"], size)?, size)
+    load_icon(
+        &find_icon(&[&exact, generic, "text-x-generic", "unknown"], size)?,
+        size,
+    )
 }
 
 /// Bir uygulamanın ikonu (`.desktop` dosyasındaki `Icon=`: tema adı ya da mutlak yol); bulunamazsa genel uygulama ikonu
@@ -133,7 +190,12 @@ pub fn app_icon(icon: Option<&str>, size: i32) -> Option<egui::ColorImage> {
         Some(i) => find_icon(&[i], size),
         None => None,
     };
-    let path = path.filter(|p| p.exists()).or_else(|| find_icon(&["application-x-executable", "application-default-icon"], size))?;
+    let path = path.filter(|p| p.exists()).or_else(|| {
+        find_icon(
+            &["application-x-executable", "application-default-icon"],
+            size,
+        )
+    })?;
     load_icon(&path, size)
 }
 
@@ -177,7 +239,12 @@ pub struct ShellMenu {
 }
 
 impl ShellMenu {
-    pub fn build(_hwnd: isize, _paths: &[PathBuf], _background: Option<&Path>, _extended: bool) -> Option<ShellMenu> {
+    pub fn build(
+        _hwnd: isize,
+        _paths: &[PathBuf],
+        _background: Option<&Path>,
+        _extended: bool,
+    ) -> Option<ShellMenu> {
         None
     }
 

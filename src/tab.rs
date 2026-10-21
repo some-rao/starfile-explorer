@@ -13,9 +13,22 @@ use crate::fsutil::{self, Entry, LoadMsg, Pattern, SearchHandle, SearchMsg, Sort
 /// Explorer'daki "Bu bilgisayar" sanal konumu (Shell ayrıştırma adı; ikonu da bununla alınır)
 pub const THIS_PC: &str = "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}";
 
-/// Klasör olmayan konumlar: Giriş (boş yol) ve Bu bilgisayar
+/// Windows 11 "Galeri" sanal konumu; ikonu kabuktan gelir, içerik `Pictures` ağacından taranır.
+pub const GALLERY: &str = "::{24AD3AD4-A569-4530-98E1-AB02F9417AA8}";
+
+/// Klasör olmayan konumlar: Giriş (boş yol), Bu bilgisayar ve Galeri
 pub fn is_virtual(p: &Path) -> bool {
-    p.as_os_str().is_empty() || p.as_os_str() == THIS_PC
+    p.as_os_str().is_empty() || p.as_os_str() == THIS_PC || p.as_os_str() == GALLERY
+}
+
+/// Galeri grup başlığı: "October 2026" (tarihi olmayanlar en sonda).
+fn gallery_month(t: Option<std::time::SystemTime>) -> String {
+    match t {
+        Some(t) => chrono::DateTime::<chrono::Local>::from(t)
+            .format("%B %Y")
+            .to_string(),
+        None => "—".to_string(),
+    }
 }
 
 /// Görünümdeki bir grup ("Dün", "Geçen hafta"…): `view[start..start + len]`
@@ -85,7 +98,11 @@ pub fn normalize(p: &Path) -> PathBuf {
         }
     }
     let t = s.trim_end_matches('/');
-    PathBuf::from(if t.is_empty() && s.starts_with('/') { "/" } else { t })
+    PathBuf::from(if t.is_empty() && s.starts_with('/') {
+        "/"
+    } else {
+        t
+    })
 }
 
 /// "C:" → "C:\", eğik çizgileri düzelt, sondaki ayırıcıyı kırp.
@@ -144,7 +161,11 @@ impl Tab {
 
     /// Henüz yüklenmemiş sekme: klasör ilk görüntülendiğinde okunur (`ensure_loaded`)
     pub fn new_lazy(path: PathBuf) -> Tab {
-        Tab { path: normalize(&path), lazy: true, ..Tab::blank() }
+        Tab {
+            path: normalize(&path),
+            lazy: true,
+            ..Tab::blank()
+        }
     }
 
     pub fn ensure_loaded(&mut self, ctx: &egui::Context) {
@@ -179,6 +200,10 @@ impl Tab {
         self.path.as_os_str() == THIS_PC
     }
 
+    pub fn is_gallery(&self) -> bool {
+        self.path.as_os_str() == GALLERY
+    }
+
     /// Dosya listesi gösteriliyor: gerçek klasör ya da arama sonuçları
     pub fn lists_files(&self) -> bool {
         !self.is_home() || self.search.is_some()
@@ -207,7 +232,7 @@ impl Tab {
         self.groups.clear();
         self.collapsed_groups.clear();
         self.cursor_path = None;
-        if self.is_home() {
+        if self.is_home() && !self.is_gallery() {
             self.loader = None;
             self.watcher = None;
             self.watch_rx = None;
@@ -216,6 +241,12 @@ impl Tab {
             return;
         }
         self.free_space = None;
+        if self.is_gallery() {
+            self.watcher = None;
+            self.watch_rx = None;
+            self.load(true, ctx);
+            return;
+        }
         self.refresh_free_space(ctx);
         self.load(true, ctx);
         self.watch(ctx);
@@ -241,6 +272,10 @@ impl Tab {
             self.exit_search(ctx);
             return;
         }
+        if self.is_gallery() {
+            self.navigate(PathBuf::new(), true, ctx);
+            return;
+        }
         if self.is_home() {
             if self.is_pc() {
                 self.navigate(PathBuf::new(), true, ctx);
@@ -248,7 +283,11 @@ impl Tab {
             return;
         }
         // Sürücü kökünün üstü Explorer'daki gibi "Bu bilgisayar"
-        let parent = self.path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from(THIS_PC));
+        let parent = self
+            .path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from(THIS_PC));
         self.select_after_load = Some(self.path.clone());
         self.navigate(parent, true, ctx);
     }
@@ -256,7 +295,7 @@ impl Tab {
     /// `progressive`: girdileri geldikçe göster (ilk açılış). Aksi halde eski liste
     /// yeni liste hazır olana kadar ekranda kalır — yenilemede titreme olmaz.
     pub fn load(&mut self, progressive: bool, ctx: &egui::Context) {
-        if self.is_home() {
+        if self.is_home() && !self.is_gallery() {
             return;
         }
         self.progressive = progressive;
@@ -269,7 +308,11 @@ impl Tab {
         }
         self.pending.clear();
         self.load_started = Instant::now();
-        self.loader = Some(fsutil::spawn_load(self.path.clone(), ctx.clone()));
+        self.loader = Some(if self.is_gallery() {
+            fsutil::spawn_gallery(ctx.clone())
+        } else {
+            fsutil::spawn_load(self.path.clone(), ctx.clone())
+        });
     }
 
     fn watch(&mut self, ctx: &egui::Context) {
@@ -339,8 +382,14 @@ impl Tab {
     }
 
     fn swap_in(&mut self, new: Vec<Entry>) {
-        let name_of = |i: Option<usize>, es: &Vec<Entry>| i.and_then(|i| es.get(i)).map(|e| e.name.clone());
-        let sel: HashSet<String> = self.selection.iter().filter_map(|&i| self.entries.get(i)).map(|e| e.name.clone()).collect();
+        let name_of =
+            |i: Option<usize>, es: &Vec<Entry>| i.and_then(|i| es.get(i)).map(|e| e.name.clone());
+        let sel: HashSet<String> = self
+            .selection
+            .iter()
+            .filter_map(|&i| self.entries.get(i))
+            .map(|e| e.name.clone())
+            .collect();
         let cur = name_of(self.cursor, &self.entries);
         let anc = name_of(self.anchor, &self.entries);
         self.entries = new;
@@ -433,7 +482,10 @@ impl Tab {
                 self.refresh_free_space(ctx);
                 self.load(false, ctx);
             } else {
-                ctx.request_repaint_after(t.saturating_duration_since(now).max(Duration::from_millis(16)));
+                ctx.request_repaint_after(
+                    t.saturating_duration_since(now)
+                        .max(Duration::from_millis(16)),
+                );
             }
         }
 
@@ -460,7 +512,13 @@ impl Tab {
         }
     }
 
-    pub fn rebuild_view(&mut self, key: SortKey, asc: bool, show_hidden: bool, group_by_date: bool) {
+    pub fn rebuild_view(
+        &mut self,
+        key: SortKey,
+        asc: bool,
+        show_hidden: bool,
+        group_by_date: bool,
+    ) {
         let pat = Pattern::new(&self.filter);
         let entries = &self.entries;
         self.view = (0..entries.len())
@@ -469,6 +527,12 @@ impl Tab {
                 (show_hidden || !e.hidden) && (pat.is_empty() || pat.matches(&e.name_lower))
             })
             .collect();
+        // Galeri her zaman en yeni fotoğraf/video üstte olacak şekilde sıralanır
+        let (key, asc) = if self.is_gallery() {
+            (SortKey::Modified, false)
+        } else {
+            (key, asc)
+        };
         let cmp = |&a: &usize, &b: &usize| fsutil::compare(&entries[a], &entries[b], key, asc);
         // Büyük klasörlerde (ör. WinSxS) tüm çekirdeklerle sırala; küçüklerde iş parçacığı maliyetine değmez
         if self.view.len() > 4000 {
@@ -478,7 +542,32 @@ impl Tab {
             self.view.sort_by(cmp);
         }
         self.groups.clear();
-        if group_by_date && self.search.is_none() {
+        if self.is_gallery() && self.search.is_none() {
+            // Ay/yıl grupları: liste zaten tarihe göre yeniden eskiye sıralı
+            let label_of = |i: usize| gallery_month(entries[i].modified);
+            let mut all = std::mem::take(&mut self.view);
+            let mut k = 0;
+            while k < all.len() {
+                let label = label_of(all[k]);
+                let end = k + all[k..]
+                    .iter()
+                    .take_while(|&&i| label_of(i) == label)
+                    .count();
+                let collapsed = self.collapsed_groups.contains(&label);
+                let start = self.view.len();
+                if !collapsed {
+                    self.view.extend_from_slice(&all[k..end]);
+                }
+                self.groups.push(Group {
+                    label,
+                    start,
+                    len: self.view.len() - start,
+                    collapsed,
+                });
+                k = end;
+            }
+            all.clear();
+        } else if group_by_date && self.search.is_none() {
             // Explorer gibi: en yeni grup üstte, grup içinde seçili sıralama korunur (kararlı sıralama)
             let now = chrono::Local::now();
             let bucket = |i: usize| fsutil::date_group(entries[i].modified, now);
@@ -494,7 +583,12 @@ impl Tab {
                 if !collapsed {
                     self.view.extend_from_slice(&all[k..end]);
                 }
-                self.groups.push(Group { label, start, len: self.view.len() - start, collapsed });
+                self.groups.push(Group {
+                    label,
+                    start,
+                    len: self.view.len() - start,
+                    collapsed,
+                });
                 k = end;
             }
             all.clear();
@@ -521,7 +615,12 @@ impl Tab {
     }
 
     pub fn selected_entries(&self) -> Vec<&Entry> {
-        let mut v: Vec<&Entry> = self.view.iter().filter(|i| self.selection.contains(i)).map(|&i| &self.entries[i]).collect();
+        let mut v: Vec<&Entry> = self
+            .view
+            .iter()
+            .filter(|i| self.selection.contains(i))
+            .map(|&i| &self.entries[i])
+            .collect();
         if v.is_empty() {
             if let Some(e) = self.cursor.and_then(|c| self.entries.get(c)) {
                 if self.view.contains(&self.cursor.unwrap()) {
@@ -533,7 +632,10 @@ impl Tab {
     }
 
     pub fn selected_paths(&self) -> Vec<PathBuf> {
-        self.selected_entries().into_iter().map(|e| e.path.clone()).collect()
+        self.selected_entries()
+            .into_iter()
+            .map(|e| e.path.clone())
+            .collect()
     }
 
     pub fn select_only(&mut self, entry_idx: usize) {
@@ -544,8 +646,15 @@ impl Tab {
     }
 
     pub fn select_range_to(&mut self, row: usize) {
-        let anchor_row = self.anchor.and_then(|a| self.view.iter().position(|&i| i == a)).unwrap_or(row);
-        let (lo, hi) = if anchor_row <= row { (anchor_row, row) } else { (row, anchor_row) };
+        let anchor_row = self
+            .anchor
+            .and_then(|a| self.view.iter().position(|&i| i == a))
+            .unwrap_or(row);
+        let (lo, hi) = if anchor_row <= row {
+            (anchor_row, row)
+        } else {
+            (row, anchor_row)
+        };
         self.selection.clear();
         self.selection.extend(self.view[lo..=hi].iter().copied());
         self.cursor = Some(self.view[row]);

@@ -10,6 +10,7 @@ use std::time::{Duration, SystemTime};
 use chrono::Datelike;
 use egui::{Align, Key, Layout, RichText};
 
+use crate::app::ui_font;
 use crate::fsutil::{self, TreeStats};
 
 /// Dosyayı açan varsayılan uygulama
@@ -24,7 +25,10 @@ enum Loaded<T> {
 }
 type Shared<T> = Arc<Mutex<Loaded<T>>>;
 
-fn spawn_load<T: Send + 'static>(ctx: &egui::Context, f: impl FnOnce() -> T + Send + 'static) -> Shared<T> {
+fn spawn_load<T: Send + 'static>(
+    ctx: &egui::Context,
+    f: impl FnOnce() -> T + Send + 'static,
+) -> Shared<T> {
     let cell: Shared<T> = Arc::new(Mutex::new(Loaded::Pending));
     let (c, ctx) = (cell.clone(), ctx.clone());
     std::thread::spawn(move || {
@@ -129,9 +133,15 @@ fn load_info(paths: &[PathBuf], type_name: &str) -> Option<Info> {
     let lmd = std::fs::symlink_metadata(first).ok()?;
     let md = std::fs::metadata(first).unwrap_or_else(|_| lmd.clone());
     let is_dir = md.is_dir();
-    let name = first.file_name().map_or_else(|| first.display().to_string(), |n| n.to_string_lossy().into_owned());
+    let name = first.file_name().map_or_else(
+        || first.display().to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
     let location = if single || paths.iter().all(|p| p.parent() == first.parent()) {
-        first.parent().map(|p| p.display().to_string()).unwrap_or_default()
+        first
+            .parent()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default()
     } else {
         String::new()
     };
@@ -140,12 +150,22 @@ fn load_info(paths: &[PathBuf], type_name: &str) -> Option<Info> {
     } else if is_dir || first.extension().is_none() {
         type_name.to_string()
     } else {
-        format!("{} (.{})", type_name, first.extension().unwrap_or_default().to_string_lossy())
+        format!(
+            "{} (.{})",
+            type_name,
+            first.extension().unwrap_or_default().to_string_lossy()
+        )
     };
     let (readonly, mode, owner, group, attrs) = {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
         let mode = md.permissions().mode();
-        let kind_char = if lmd.file_type().is_symlink() { 'l' } else if is_dir { 'd' } else { '-' };
+        let kind_char = if lmd.file_type().is_symlink() {
+            'l'
+        } else if is_dir {
+            'd'
+        } else {
+            '-'
+        };
         (
             mode & 0o222 == 0,
             mode & 0o7777,
@@ -154,7 +174,14 @@ fn load_info(paths: &[PathBuf], type_name: &str) -> Option<Info> {
             format!("{kind_char}{}", fsutil::mode_string(mode)),
         )
     };
-    let mime = if is_dir { "inode/directory".to_string() } else { mime_guess::from_path(first).first_raw().unwrap_or("application/octet-stream").to_string() };
+    let mime = if is_dir {
+        "inode/directory".to_string()
+    } else {
+        mime_guess::from_path(first)
+            .first_raw()
+            .unwrap_or("application/octet-stream")
+            .to_string()
+    };
 
     let file_size = (single && !is_dir).then(|| {
         let on_disk = std::os::unix::fs::MetadataExt::blocks(&md) * 512;
@@ -165,7 +192,15 @@ fn load_info(paths: &[PathBuf], type_name: &str) -> Option<Info> {
         kind,
         is_dir,
         location,
-        link: lmd.file_type().is_symlink().then(|| std::fs::read_link(first).ok().map(|t| t.display().to_string())).flatten(),
+        link: lmd
+            .file_type()
+            .is_symlink()
+            .then(|| {
+                std::fs::read_link(first)
+                    .ok()
+                    .map(|t| t.display().to_string())
+            })
+            .flatten(),
         created: md.created().ok(),
         modified: md.modified().ok(),
         accessed: md.accessed().ok(),
@@ -181,17 +216,36 @@ fn load_info(paths: &[PathBuf], type_name: &str) -> Option<Info> {
 
 // ---------------------------------------------------------------- biçimlendirme (Windows gibi)
 
-const WEEKDAYS: [&str; 7] = ["Pazartesi", "Salı", "Çarşamba", "Perşembe", "Cuma", "Cumartesi", "Pazar"];
-const MONTHS: [&str; 12] = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"];
+const WEEKDAYS: [&str; 7] = [
+    "Pazartesi",
+    "Salı",
+    "Çarşamba",
+    "Perşembe",
+    "Cuma",
+    "Cumartesi",
+    "Pazar",
+];
+const MONTHS: [&str; 12] = [
+    "Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz", "Ağustos", "Eylül", "Ekim",
+    "Kasım", "Aralık",
+];
 
 /// "Monday, October 12, 2026, 9:20:57 AM" (Windows'un uzun tarih biçimi; dile göre)
 fn long_date(t: Option<SystemTime>) -> String {
-    let Some(t) = t else { return crate::i18n::t("Kullanılamıyor").to_string() };
+    let Some(t) = t else {
+        return crate::i18n::t("Kullanılamıyor").to_string();
+    };
     let dt = chrono::DateTime::<chrono::Local>::from(t);
     let time = dt.format(crate::i18n::t("%H:%M:%S")).to_string();
     crate::i18n::tf(
         "{2} {1} {3} {0}, {4}",
-        &[&crate::i18n::t(WEEKDAYS[dt.weekday().num_days_from_monday() as usize]), &crate::i18n::t(MONTHS[dt.month0() as usize]), &dt.day(), &dt.year(), &time],
+        &[
+            &crate::i18n::t(WEEKDAYS[dt.weekday().num_days_from_monday() as usize]),
+            &crate::i18n::t(MONTHS[dt.month0() as usize]),
+            &dt.day(),
+            &dt.year(),
+            &time,
+        ],
     )
 }
 
@@ -223,7 +277,13 @@ fn size_short(n: u64) -> String {
         v /= 1024.0;
         i += 1;
     }
-    let s = if v < 10.0 { format!("{v:.2}") } else if v < 100.0 { format!("{v:.1}") } else { format!("{v:.0}") };
+    let s = if v < 10.0 {
+        format!("{v:.2}")
+    } else if v < 100.0 {
+        format!("{v:.1}")
+    } else {
+        format!("{v:.0}")
+    };
     format!("{} {}", s.replace('.', crate::i18n::t(",")), U[i])
 }
 
@@ -232,7 +292,11 @@ fn size_full(n: u64) -> String {
     if n < 1024 {
         size_short(n)
     } else {
-        format!("{} ({})", size_short(n), crate::i18n::tf("{} bayt", &[&group_digits(n)]))
+        format!(
+            "{} ({})",
+            size_short(n),
+            crate::i18n::tf("{} bayt", &[&group_digits(n)])
+        )
     }
 }
 
@@ -266,13 +330,18 @@ impl Properties {
     }
 
     fn dirty(&self) -> bool {
-        (self.single() && self.name.trim() != self.info.name) || self.readonly != self.info.readonly || self.mode != self.info.mode
+        (self.single() && self.name.trim() != self.info.name)
+            || self.readonly != self.info.readonly
+            || self.mode != self.info.mode
     }
 
     /// İkon için (yol, klasör mü, uzantı)
     fn icon_target(&self) -> (&Path, bool, String) {
         let p = &self.paths[0];
-        let ext = p.extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+        let ext = p
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
         (p, self.info.is_dir, ext)
     }
 
@@ -302,8 +371,13 @@ impl Properties {
                     self.mode
                 } else {
                     // Çoklu seçimde yalnızca yazma bitleri değişir; diğer izinler olduğu gibi kalır
-                    let cur = std::fs::metadata(p).map_or(0o644, |m| m.permissions().mode() & 0o7777);
-                    if self.readonly { cur & !0o222 } else { cur | 0o200 }
+                    let cur =
+                        std::fs::metadata(p).map_or(0o644, |m| m.permissions().mode() & 0o7777);
+                    if self.readonly {
+                        cur & !0o222
+                    } else {
+                        cur | 0o200
+                    }
                 };
                 if let Err(e) = std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)) {
                     errors.push(crate::i18n::tf("İzinler ayarlanamadı: {}", &[&e]));
@@ -338,14 +412,20 @@ impl Properties {
     fn rename(&self, new_name: &str) -> Result<PathBuf, String> {
         let from = &self.paths[0];
         if !crate::app::valid_name(new_name) {
-            return Err(crate::i18n::t("Ad şu karakterleri içeremez: \\ / : * ? \" < > |").to_string());
+            return Err(
+                crate::i18n::t("Ad şu karakterleri içeremez: \\ / : * ? \" < > |").to_string(),
+            );
         }
         let to = from.with_file_name(new_name);
         // Yalnızca büyük/küçük harf farkı Windows'ta da çalışsın diye ayrı kontrol
         if to.exists() && !new_name.eq_ignore_ascii_case(&self.info.name) {
-            return Err(crate::i18n::tf("\"{}\" adında bir öğe zaten var", &[&new_name]));
+            return Err(crate::i18n::tf(
+                "\"{}\" adında bir öğe zaten var",
+                &[&new_name],
+            ));
         }
-        std::fs::rename(from, &to).map_err(|e| crate::i18n::tf("Yeniden adlandırılamadı: {}", &[&e]))?;
+        std::fs::rename(from, &to)
+            .map_err(|e| crate::i18n::tf("Yeniden adlandırılamadı: {}", &[&e]))?;
         Ok(to)
     }
 
@@ -357,61 +437,103 @@ impl Properties {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
         let title = crate::i18n::tf("{} özellikleri", &[&self.info.name]);
-        let pos = *self.pos.get_or_insert_with(|| centered_on_parent(ctx, WINDOW_SIZE));
+        let pos = *self
+            .pos
+            .get_or_insert_with(|| centered_on_parent(ctx, WINDOW_SIZE));
         let builder = dialog_builder(&title, WINDOW_SIZE, pos);
         let mut out = Outcome::default();
-        ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("swift_explorer_properties"), builder, |ctx, class| {
-            out = self.viewport_ui(ctx, class, &title, busy, icon);
-        });
+        ctx.show_viewport_immediate(
+            egui::ViewportId::from_hash_of("swift_explorer_properties"),
+            builder,
+            |ctx, class| {
+                out = self.viewport_ui(ctx, class, &title, busy, icon);
+            },
+        );
         if self.chooser.is_some() {
             self.run_chooser(ctx);
         }
         out
     }
 
-    fn viewport_ui(&mut self, ctx: &egui::Context, class: egui::ViewportClass, title: &str, busy: bool, icon: &mut IconFn) -> Outcome {
+    fn viewport_ui(
+        &mut self,
+        ctx: &egui::Context,
+        class: egui::ViewportClass,
+        title: &str,
+        busy: bool,
+        icon: &mut IconFn,
+    ) -> Outcome {
         let (mut ok, mut cancel, mut apply) = (false, false, false);
         let esc = ctx.input(|i| i.key_pressed(Key::Escape));
         cancel |= esc || ctx.input(|i| i.viewport().close_requested());
 
         let mut layout = |ui: &mut egui::Ui| {
             let dirty = self.dirty();
-            egui::TopBottomPanel::bottom("props_buttons").frame(panel_frame(ui, 10)).show_inside(ui, |ui| {
-                ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), BUTTON_H), Layout::right_to_left(Align::Center), |ui| {
-                    let size = egui::vec2(80.0, BUTTON_H);
-                    apply = ui.add_enabled(dirty, egui::Button::new(crate::i18n::t("Uygula")).min_size(size)).clicked();
-                    cancel |= ui.add(egui::Button::new(crate::i18n::t("İptal")).min_size(size)).clicked();
-                    ok |= ui.add(egui::Button::new(crate::i18n::t("Tamam")).min_size(size)).clicked();
+            egui::TopBottomPanel::bottom("props_buttons")
+                .frame(panel_frame(ui, 10))
+                .show_inside(ui, |ui| {
+                    ui.allocate_ui_with_layout(
+                        egui::vec2(ui.available_width(), BUTTON_H),
+                        Layout::right_to_left(Align::Center),
+                        |ui| {
+                            let size = egui::vec2(80.0, BUTTON_H);
+                            apply = ui
+                                .add_enabled(
+                                    dirty,
+                                    egui::Button::new(crate::i18n::t("Uygula")).min_size(size),
+                                )
+                                .clicked();
+                            cancel |= ui
+                                .add(egui::Button::new(crate::i18n::t("İptal")).min_size(size))
+                                .clicked();
+                            ok |= ui
+                                .add(egui::Button::new(crate::i18n::t("Tamam")).min_size(size))
+                                .clicked();
+                        },
+                    );
                 });
-            });
             let tabs = self.tabs();
             if !tabs.iter().any(|(t, _)| *t == self.tab) {
                 self.tab = Tab::General;
             }
-            egui::TopBottomPanel::top("props_tabs").frame(panel_frame(ui, 8)).show_inside(ui, |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    ui.spacing_mut().item_spacing.x = 2.0;
-                    for (tab, label) in &tabs {
-                        ui.selectable_value(&mut self.tab, *tab, RichText::new(crate::i18n::t(label)).size(13.0));
-                    }
+            egui::TopBottomPanel::top("props_tabs")
+                .frame(panel_frame(ui, 8))
+                .show_inside(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        for (tab, label) in &tabs {
+                            ui.selectable_value(
+                                &mut self.tab,
+                                *tab,
+                                RichText::new(crate::i18n::t(label)).size(13.0),
+                            );
+                        }
+                    });
                 });
-            });
-            egui::CentralPanel::default().frame(panel_frame(ui, 12)).show_inside(ui, |ui| match self.tab {
-                Tab::General => ok |= self.general_tab(ui, busy, icon),
-                Tab::DigitalSignatures => self.signatures_tab(ui),
-                Tab::Security => self.security_tab(ui),
-                Tab::Details => self.details_tab(ui, busy),
-                Tab::PreviousVersions => self.previous_versions_tab(ui),
-            });
+            egui::CentralPanel::default()
+                .frame(panel_frame(ui, 12))
+                .show_inside(ui, |ui| match self.tab {
+                    Tab::General => ok |= self.general_tab(ui, busy, icon),
+                    Tab::DigitalSignatures => self.signatures_tab(ui),
+                    Tab::Security => self.security_tab(ui),
+                    Tab::Details => self.details_tab(ui, busy),
+                    Tab::PreviousVersions => self.previous_versions_tab(ui),
+                });
         };
         if class == egui::ViewportClass::Embedded {
             // Birden çok pencereyi desteklemeyen arka uçlarda uygulama penceresinin içinde açılır
-            egui::Window::new(title).id(egui::Id::new("properties")).collapsible(false).resizable(false).show(ctx, |ui| {
-                ui.set_min_size(WINDOW_SIZE);
-                layout(ui);
-            });
+            egui::Window::new(title)
+                .id(egui::Id::new("properties"))
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.set_min_size(WINDOW_SIZE);
+                    layout(ui);
+                });
         } else {
-            egui::CentralPanel::default().frame(egui::Frame::NONE).show(ctx, |ui| layout(ui));
+            egui::CentralPanel::default()
+                .frame(egui::Frame::NONE)
+                .show(ctx, |ui| layout(ui));
         }
 
         let mut out = Outcome::default();
@@ -435,7 +557,8 @@ impl Properties {
             icon(ui, &p, is_dir, &ext, 32.0);
             ui.add_space(6.0);
             if self.single() {
-                let r = ui.add(egui::TextEdit::singleline(&mut self.name).desired_width(f32::INFINITY));
+                let r =
+                    ui.add(egui::TextEdit::singleline(&mut self.name).desired_width(f32::INFINITY));
                 enter = r.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
             } else {
                 ui.label(crate::i18n::tf("{} öğe", &[&self.paths.len()]));
@@ -463,10 +586,29 @@ impl Properties {
                 row(ui, "Boyut", size_full(size));
                 row(ui, "Disk üzerindeki boyut", size_full(on_disk));
             } else if let Some(s) = &self.stats {
-                let wait = if busy { format!("  {}", crate::i18n::t("Hesaplanıyor…")) } else { String::new() };
-                row(ui, "Boyut", format!("{}{wait}", size_full(s.size.load(Relaxed))));
-                row(ui, "Disk üzerindeki boyut", format!("{}{wait}", size_full(s.on_disk.load(Relaxed))));
-                row(ui, "İçerik", crate::i18n::tf("{} Dosya, {} Klasör", &[&s.files.load(Relaxed), &s.dirs.load(Relaxed)]));
+                let wait = if busy {
+                    format!("  {}", crate::i18n::t("Hesaplanıyor…"))
+                } else {
+                    String::new()
+                };
+                row(
+                    ui,
+                    "Boyut",
+                    format!("{}{wait}", size_full(s.size.load(Relaxed))),
+                );
+                row(
+                    ui,
+                    "Disk üzerindeki boyut",
+                    format!("{}{wait}", size_full(s.on_disk.load(Relaxed))),
+                );
+                row(
+                    ui,
+                    "İçerik",
+                    crate::i18n::tf(
+                        "{} Dosya, {} Klasör",
+                        &[&s.files.load(Relaxed), &s.dirs.load(Relaxed)],
+                    ),
+                );
             }
         });
         if self.single() {
@@ -487,13 +629,26 @@ impl Properties {
             ui.label(RichText::new(crate::i18n::t("Öznitelikler")).weak());
             ui.add_space(8.0);
             let mut ro = self.readonly;
-            if ui.checkbox(&mut ro, crate::i18n::t("Salt okunur")).changed() {
+            if ui
+                .checkbox(&mut ro, crate::i18n::t("Salt okunur"))
+                .changed()
+            {
                 self.set_readonly(ro);
             }
             // Unix'te gizli olmak adın noktayla başlamasıdır; çoklu seçimde birden çok adı değiştirmeyiz
             let mut hidden = self.name.starts_with('.');
-            if ui.add_enabled(self.single(), egui::Checkbox::new(&mut hidden, crate::i18n::t("Gizli"))).changed() {
-                self.name = if hidden { format!(".{}", self.name) } else { self.name.trim_start_matches('.').to_string() };
+            if ui
+                .add_enabled(
+                    self.single(),
+                    egui::Checkbox::new(&mut hidden, crate::i18n::t("Gizli")),
+                )
+                .changed()
+            {
+                self.name = if hidden {
+                    format!(".{}", self.name)
+                } else {
+                    self.name.trim_start_matches('.').to_string()
+                };
             }
         });
         enter
@@ -501,23 +656,37 @@ impl Properties {
 
     /// "Opens with: [simge] Notepad   [Değiştir…]"; Değiştir'e basıldıysa `true` döner
     fn opens_with_row(&self, ui: &mut egui::Ui) -> bool {
-        let Some(cell) = &self.opens_with else { return false };
+        let Some(cell) = &self.opens_with else {
+            return false;
+        };
         let guard = cell.lock().unwrap();
         let mut change = false;
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.add_sized([KEY_WIDTH, 20.0], egui::Label::new(RichText::new(crate::i18n::t("Açan uygulama")).weak()));
+            ui.add_sized(
+                [KEY_WIDTH, 20.0],
+                egui::Label::new(RichText::new(crate::i18n::t("Açan uygulama")).weak()),
+            );
             match &*guard {
                 Loaded::Pending => {
                     ui.label(RichText::new(crate::i18n::t("Yükleniyor…")).weak());
                 }
                 Loaded::Done(app) => {
-                    ui.label(app.as_ref().map_or_else(|| crate::i18n::t("Bilinmiyor").to_string(), |a| a.name.clone()));
+                    ui.label(app.as_ref().map_or_else(
+                        || crate::i18n::t("Bilinmiyor").to_string(),
+                        |a| a.name.clone(),
+                    ));
                 }
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 let pending = matches!(&*guard, Loaded::Pending);
-                change = ui.add_enabled(!pending, egui::Button::new(crate::i18n::t("Değiştir…")).min_size(egui::vec2(90.0, 24.0))).clicked();
+                change = ui
+                    .add_enabled(
+                        !pending,
+                        egui::Button::new(crate::i18n::t("Değiştir…"))
+                            .min_size(egui::vec2(90.0, 24.0)),
+                    )
+                    .clicked();
             });
         });
         ui.add_space(4.0);
@@ -530,15 +699,34 @@ impl Properties {
         let data = spawn_load(ctx, move || {
             let mime = crate::win::mime_of(&p).unwrap_or_default();
             let current = crate::win::default_app_id(&mime);
-            let (recommended, other) = crate::desktop_apps::installed_apps().into_iter().partition(|a| a.mimes.contains(&mime));
-            ChooserData { mime, current, recommended, other }
+            let (recommended, other) = crate::desktop_apps::installed_apps()
+                .into_iter()
+                .partition(|a| a.mimes.contains(&mime));
+            ChooserData {
+                mime,
+                current,
+                recommended,
+                other,
+            }
         });
-        self.chooser = Some(Chooser { data, selected: None, pos: None, synced: false, scroll_pending: false, icons: Default::default() });
+        self.chooser = Some(Chooser {
+            data,
+            selected: None,
+            pos: None,
+            synced: false,
+            scroll_pending: false,
+            icons: Default::default(),
+        });
     }
 
     fn run_chooser(&mut self, ctx: &egui::Context) {
-        let ext = self.paths[0].extension().map_or_else(|| self.info.name.clone(), |e| format!(".{}", e.to_string_lossy()));
-        let Some(ch) = self.chooser.as_mut() else { return };
+        let ext = self.paths[0].extension().map_or_else(
+            || self.info.name.clone(),
+            |e| format!(".{}", e.to_string_lossy()),
+        );
+        let Some(ch) = self.chooser.as_mut() else {
+            return;
+        };
         match show_chooser(ch, ctx, &ext) {
             ChooserEvent::None => {}
             ChooserEvent::Cancel => self.chooser = None,
@@ -557,7 +745,11 @@ impl Properties {
     fn set_readonly(&mut self, ro: bool) {
         self.readonly = ro;
         if self.single() {
-            self.mode = if ro { self.mode & !0o222 } else { self.mode | 0o200 };
+            self.mode = if ro {
+                self.mode & !0o222
+            } else {
+                self.mode | 0o200
+            };
         }
     }
 
@@ -579,37 +771,56 @@ impl Properties {
             ui.label(RichText::new(crate::i18n::t("İzinler")).weak());
             ui.add_space(4.0);
             let mut mode = self.mode;
-            egui::Grid::new("props_perm").num_columns(4).spacing([18.0, 8.0]).min_col_width((ui.available_width() - 54.0) / 4.0).show(ui, |ui| {
-                ui.label("");
-                for h in ["Okuma", "Yazma", "Çalıştırma"] {
-                    ui.label(RichText::new(crate::i18n::t(h)).weak());
-                }
-                ui.end_row();
-                for (who, shift) in [("Sahip", 6), ("Grup", 3), ("Diğerleri", 0)] {
-                    ui.label(crate::i18n::t(who));
-                    for bit in [0o4, 0o2, 0o1] {
-                        let mask = bit << shift;
-                        let mut on = mode & mask != 0;
-                        if ui.checkbox(&mut on, "").changed() {
-                            mode = if on { mode | mask } else { mode & !mask };
-                        }
+            egui::Grid::new("props_perm")
+                .num_columns(4)
+                .spacing([18.0, 8.0])
+                .min_col_width((ui.available_width() - 54.0) / 4.0)
+                .show(ui, |ui| {
+                    ui.label("");
+                    for h in ["Okuma", "Yazma", "Çalıştırma"] {
+                        ui.label(RichText::new(crate::i18n::t(h)).weak());
                     }
                     ui.end_row();
-                }
-            });
+                    for (who, shift) in [("Sahip", 6), ("Grup", 3), ("Diğerleri", 0)] {
+                        ui.label(crate::i18n::t(who));
+                        for bit in [0o4, 0o2, 0o1] {
+                            let mask = bit << shift;
+                            let mut on = mode & mask != 0;
+                            if ui.checkbox(&mut on, "").changed() {
+                                mode = if on { mode | mask } else { mode & !mask };
+                            }
+                        }
+                        ui.end_row();
+                    }
+                });
             if mode != self.mode {
                 self.mode = mode;
                 self.readonly = mode & 0o222 == 0;
             }
             ui.add_space(8.0);
-            ui.label(RichText::new(format!("{}  ({:03o})", fsutil::mode_string(self.mode), self.mode)).monospace());
+            ui.label(
+                RichText::new(format!(
+                    "{}  ({:03o})",
+                    fsutil::mode_string(self.mode),
+                    self.mode
+                ))
+                .monospace(),
+            );
         }
     }
 
     fn details_tab(&self, ui: &mut egui::Ui, busy: bool) {
         let size = match (self.info.file_size, &self.stats) {
             (Some((s, _)), _) => size_short(s),
-            (None, Some(st)) => format!("{}{}", size_short(st.size.load(Relaxed)), if busy { format!("  {}", crate::i18n::t("Hesaplanıyor…")) } else { String::new() }),
+            (None, Some(st)) => format!(
+                "{}{}",
+                size_short(st.size.load(Relaxed)),
+                if busy {
+                    format!("  {}", crate::i18n::t("Hesaplanıyor…"))
+                } else {
+                    String::new()
+                }
+            ),
             _ => String::new(),
         };
         let i = &self.info;
@@ -636,27 +847,45 @@ impl Properties {
             let w = ui.available_width();
             let head = |ui: &mut egui::Ui, k: &str, v: &str| {
                 ui.horizontal(|ui| {
-                    ui.add_sized([KEY_WIDTH, 18.0], egui::Label::new(RichText::new(k).strong()));
+                    ui.add_sized(
+                        [KEY_WIDTH, 18.0],
+                        egui::Label::new(RichText::new(k).strong()),
+                    );
                     ui.label(RichText::new(v).strong());
                 });
             };
             head(ui, crate::i18n::t("Özellik"), crate::i18n::t("Değer"));
             ui.separator();
             for (n, (k, v)) in rows.into_iter().enumerate() {
-                let fill = if n % 2 == 0 { ui.visuals().faint_bg_color } else { egui::Color32::TRANSPARENT };
-                egui::Frame::new().fill(fill).inner_margin(egui::Margin::symmetric(4, 3)).show(ui, |ui| {
-                    ui.set_width(w - 8.0);
-                    ui.horizontal_top(|ui| {
-                        ui.add_sized([KEY_WIDTH - 4.0, 18.0], egui::Label::new(RichText::new(crate::i18n::t(k)).weak()));
-                        ui.add(egui::Label::new(v).wrap().selectable(true));
+                let fill = if n % 2 == 0 {
+                    ui.visuals().faint_bg_color
+                } else {
+                    egui::Color32::TRANSPARENT
+                };
+                egui::Frame::new()
+                    .fill(fill)
+                    .inner_margin(egui::Margin::symmetric(4, 3))
+                    .show(ui, |ui| {
+                        ui.set_width(w - 8.0);
+                        ui.horizontal_top(|ui| {
+                            ui.add_sized(
+                                [KEY_WIDTH - 4.0, 18.0],
+                                egui::Label::new(RichText::new(crate::i18n::t(k)).weak()),
+                            );
+                            ui.add(egui::Label::new(v).wrap().selectable(true));
+                        });
                     });
-                });
             }
         });
     }
 
     /// Başlık ve değer satırları; değer kalan genişliği doldurur
-    fn grid(&self, ui: &mut egui::Ui, _id: &str, add: impl FnOnce(&mut egui::Ui, &dyn Fn(&mut egui::Ui, &str, String))) {
+    fn grid(
+        &self,
+        ui: &mut egui::Ui,
+        _id: &str,
+        add: impl FnOnce(&mut egui::Ui, &dyn Fn(&mut egui::Ui, &str, String)),
+    ) {
         let row = |ui: &mut egui::Ui, k: &str, v: String| kv_row(ui, k, v);
         ui.add_space(2.0);
         add(ui, &row);
@@ -668,7 +897,10 @@ const KEY_WIDTH: f32 = 130.0;
 
 fn kv_row(ui: &mut egui::Ui, key: &str, value: String) {
     ui.horizontal_top(|ui| {
-        ui.add_sized([KEY_WIDTH, 18.0], egui::Label::new(RichText::new(crate::i18n::t(key)).weak()));
+        ui.add_sized(
+            [KEY_WIDTH, 18.0],
+            egui::Label::new(RichText::new(crate::i18n::t(key)).weak()),
+        );
         ui.add(egui::Label::new(value).wrap().selectable(true));
     });
     ui.add_space(3.0);
@@ -676,13 +908,15 @@ fn kv_row(ui: &mut egui::Ui, key: &str, value: String) {
 
 /// Bu sistemde karşılığı olmayan sekmelerde gösterilen bilgi şeridi
 fn banner(ui: &mut egui::Ui, text: &str) {
-    egui::Frame::group(ui.style()).fill(ui.visuals().faint_bg_color).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("ℹ").size(18.0).weak());
-            ui.add(egui::Label::new(RichText::new(crate::i18n::t(text)).weak()).wrap());
+    egui::Frame::group(ui.style())
+        .fill(ui.visuals().faint_bg_color)
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("ℹ").size(18.0).weak());
+                ui.add(egui::Label::new(RichText::new(crate::i18n::t(text)).weak()).wrap());
+            });
         });
-    });
 }
 
 const BUTTON_H: f32 = 28.0;
@@ -692,7 +926,9 @@ const CHOOSER_SIZE: egui::Vec2 = egui::vec2(420.0, 500.0);
 
 /// Ana pencerenin ortasına yerleşen bir pencerenin sol üst köşesi
 fn centered_on_parent(ctx: &egui::Context, size: egui::Vec2) -> egui::Pos2 {
-    let parent = ctx.input(|i| i.viewport().outer_rect).unwrap_or_else(|| ctx.screen_rect());
+    let parent = ctx
+        .input(|i| i.viewport().outer_rect)
+        .unwrap_or_else(|| ctx.screen_rect());
     parent.center() - size / 2.0
 }
 
@@ -706,12 +942,17 @@ fn dialog_builder(title: &str, size: egui::Vec2, pos: egui::Pos2) -> egui::Viewp
         .with_resizable(false)
         .with_minimize_button(false)
         .with_maximize_button(false)
-        .with_icon(eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")).unwrap_or_default())
+        .with_icon(
+            eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png"))
+                .unwrap_or_default(),
+        )
 }
 
 /// Pencere içi bölmelerin çerçevesi: uygulamanın tema rengi ve eşit dolgu
 fn panel_frame(ui: &egui::Ui, margin: i8) -> egui::Frame {
-    egui::Frame::NONE.fill(ui.visuals().panel_fill).inner_margin(egui::Margin::symmetric(margin + 2, margin))
+    egui::Frame::NONE
+        .fill(ui.visuals().panel_fill)
+        .inner_margin(egui::Margin::symmetric(margin + 2, margin))
 }
 
 struct ChooserData {
@@ -742,7 +983,9 @@ enum ChooserEvent {
 /// "Birlikte aç…" penceresi: dosya türü için varsayılan uygulamayı seçtirir (ayrı pencere)
 fn show_chooser(ch: &mut Chooser, ctx: &egui::Context, ext: &str) -> ChooserEvent {
     let mut event = ChooserEvent::None;
-    let pos = *ch.pos.get_or_insert_with(|| centered_on_parent(ctx, CHOOSER_SIZE));
+    let pos = *ch
+        .pos
+        .get_or_insert_with(|| centered_on_parent(ctx, CHOOSER_SIZE));
     let builder = dialog_builder(crate::i18n::t("Birlikte aç…"), CHOOSER_SIZE, pos);
     let guard = ch.data.clone();
     ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("swift_explorer_chooser"), builder, |ctx, class| {
@@ -821,7 +1064,7 @@ fn show_chooser(ch: &mut Chooser, ctx: &egui::Context, ext: &str) -> ChooserEven
                                         ui.painter().image(tex.id(), r, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
                                     }
                                 }
-                                ui.painter().text(rect.left_center() + egui::vec2(8.0 + ICON_SIZE + 10.0, 0.0), egui::Align2::LEFT_CENTER, &a.name, egui::FontId::proportional(14.0), text_color);
+                                ui.painter().text(rect.left_center() + egui::vec2(8.0 + ICON_SIZE + 10.0, 0.0), egui::Align2::LEFT_CENTER, &a.name, ui_font(14.0), text_color);
                                 if sel && scroll {
                                     resp.scroll_to_me(Some(Align::Center));
                                     scroll = false;

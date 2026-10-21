@@ -30,7 +30,8 @@ Non-obvious decisions that shape everything:
    `fn(&mut self, ui, &mut Vec<Action>)` methods. Mutations go through an action queue.
 2. **No async runtime.** Threads + channels; every frame polls what finished.
 3. **Virtual locations are sentinel paths**, not a separate enum: `""` = Home, `"::{20D04FE0-…}"` =
-   This PC (`tab.rs:14-19`). `is_home()` covers both (`tab.rs:174-176`).
+   This PC, `"::{24AD3AD4-A569-4530-98E1-AB02F9417AA8}"` = Gallery (`tab.rs:14-24`).
+   `is_home()` covers all three; `is_gallery()` is the exception that still lists files.
 4. **Native shell is used for heavy lifting on Windows**: icons, thumbnails, type names, context menu,
    OLE drag-out, clipboard, properties sheet. This keeps the exe small and native-feeling.
 5. **Settings are one JSON file** rewritten wholesale (not eframe storage).
@@ -65,23 +66,28 @@ swift-explorer.exe [path]
 ## 3. Module map
 
 | File | Lines | Role | Compiled when |
-|---|---|---|---|
-| `src/main.rs` | 70 | Entry, args (`--background`, `--after-update`), single-instance handoff, eframe options | always |
-| `src/app.rs` | 4526 | `App` state, every panel/view/menu/dialog, action dispatch, shortcuts, theme, fonts, update polling | always |
-| `src/tab.rs` | 553 | `Tab`: path, entries, filtered view, selection, history, loader, watcher, search, groups | always |
-| `src/fsutil.rs` | 1134 | `Entry`, sorting, wildcards, listing loader, search, jobs (copy/move/delete/restore/size), formatting, preview read | always |
-| `src/images.rs` | 317 | Icon/thumbnail worker pool + texture cache (keys, LRU, dedupe, startup warm-up) | always |
-| `src/shell.rs` | 490 | Win32: `IShellItemImageFactory` icons, type names, native context menu, OLE drag-out, DWM cloak, resize subclass | Windows |
-| `src/shell_unix.rs` | 170 | freedesktop icons (theme lookup, SVG via resvg, `image` thumbnails), type names, stubs | non-Windows |
-| `src/win.rs` | 472 | Win32: drives, clipboard (CF_HDROP), single instance, autostart, default file manager, properties, terminals, DWM accent | Windows |
-| `src/win_unix.rs` | 325 | mounts, `statvfs`, xdg-mime, FileManager1 D-Bus, terminals, Flatpak `flatpak-spawn` | non-Windows |
-| `src/properties.rs` | 869 | Own Properties window: General/Security/Details tabs, permissions, size scan, default-app chooser | non-Windows |
-| `src/desktop_apps.rs` | 162 | `.desktop` scanning, localized names, MIME associations | non-Windows |
-| `src/update.rs` | 273 | `latest.json` fetch, SHA-256, exe swap, `.pending` rollback, `launch_hidden` | always |
-| `src/i18n.rs` | 523 | Turkish-key tables, `LANGS`, `t()`, `tf()`, plural heuristics, language detection | always |
-| `src/scheme.rs` | 85 | 12 colour schemes + process-global active scheme | always |
-| `src/screenshot.rs` | 122 | Feature-gated self-screenshot harness for README images | `feature = "screenshot"` |
+|---|---|---|---|---|
+| `src/main.rs` | 87 | Entry, args (`--background`, `--after-update`, `--uninstall-cleanup`), single-instance handoff, eframe options | always |
+| `src/app.rs` | ~6740 | `App` state, every panel/view/menu/dialog, action dispatch, shortcuts, theme, fonts, update polling, Gallery/WSL sidebar | always |
+| `src/tab.rs` | ~620 | `Tab`: path, entries, filtered view, selection, history, loader, watcher, search, groups; virtual `GALLERY` page | always |
+| `src/fsutil.rs` | ~1330 | `Entry`, sorting, wildcards, listing loader, search, Gallery scan, jobs (copy/move/delete/restore/size), formatting, preview read | always |
+| `src/images.rs` | ~390 | Icon/thumbnail worker pool + texture cache (keys, LRU, dedupe, startup warm-up); local image decode fallback | always |
+| `src/menu.rs` | ~660 | Windows 11 style modern context menu renderer (shell verb tree, Fluent icons, submenus, quick actions) | always |
+| `src/system.rs` | ~120 | Windows text scale, animation setting, DPI awareness, AUMID, DWM rounded corners/immersive dark frame | always |
+| `src/wsl.rs` | ~75 | WSL distro discovery (`wsl.exe --list --quiet`, UTF-16LE fallback, 10 s cache) | Windows (stub elsewhere) |
+| `src/newfile.rs` | ~370 | "New" submenu document templates (other contributors' feature) | always |
+| `src/shell.rs` | ~940 | Win32: `IShellItemImageFactory` icons, shell verb tree, type names, native context menu, OLE drag-out, DWM cloak, resize subclass | Windows |
+| `src/shell_unix.rs` | ~250 | freedesktop icons (theme lookup, SVG via resvg, `image` thumbnails), type names, stubs | non-Windows |
+| `src/win.rs` | ~630 | Win32: drives, clipboard (CF_HDROP), single instance, autostart, default file manager, properties, terminals, DWM accent | Windows |
+| `src/win_unix.rs` | ~310 | mounts, `statvfs`, xdg-mime, FileManager1 D-Bus, terminals, Flatpak `flatpak-spawn` | non-Windows |
+| `src/properties.rs` | ~1050 | Own Properties window: General/Security/Details tabs, permissions, size scan, default-app chooser | non-Windows |
+| `src/desktop_apps.rs` | ~200 | `.desktop` scanning, localized names, MIME associations | non-Windows |
+| `src/update.rs` | ~280 | `latest.json` fetch, SHA-256, exe swap, `.pending` rollback, `launch_hidden` | always |
+| `src/i18n.rs` | ~570 | Turkish-key tables, `LANGS`, `t()`, `tf()`, plural heuristics, language detection | always |
+| `src/scheme.rs` | ~210 | 12 colour schemes + process-global active scheme | always |
+| `src/screenshot.rs` | ~160 | Feature-gated self-screenshot/input harness (`click:`, `hover:`, `rclick:`) | `feature = "screenshot"` |
 | `build.rs` | 13 | Embeds icon/manifest for GNU Windows targets via `winresource` | build script |
+| `packaging/windows/swift-explorer.iss` | — | Inno Setup per-user installer/uninstaller (Start Menu, optional desktop shortcut, AUMID) | installer only |
 | `src/i18n/{de,es,fr,pt,ru,zh,ja}.rs` | ~20 KB each | One table per language, key = Turkish source string | always |
 
 `main.rs` wires platform files by *path aliasing*, not traits:
@@ -360,6 +366,28 @@ Known asymmetries (do not "fix" by assuming symmetry): `open_terminal` returns `
 `shell::app_icon` and `win::show_properties` are single-platform; `NATIVE_MENU = cfg!(windows)`
 (`app.rs:838`) is a compile-time constant, so both branches of `if NATIVE_MENU` must type-check.
 
+### 10.3 Virtual pages: Gallery and WSL
+
+**Gallery** (`tab::GALLERY`) is the only virtual location that lists files.
+
+| Piece | Behaviour |
+|---|---|
+| Path | Explorer's real Gallery CLSID `{24AD3AD4-A569-4530-98E1-AB02F9417AA8}`; the shell supplies the sidebar icon |
+| Scan | `fsutil::spawn_gallery` walks `dirs::picture_dir()` (Pictures, including OneDrive redirection) recursively, skips hidden/reparse dirs, keeps image + video extensions, caps at 5000, returns one batch |
+| Ordering | `Tab::rebuild_view` forces `SortKey::Modified`, descending, and groups by month/year (`October 2026`) |
+| Loading | `Tab::navigate`/`load` special-case `is_gallery()` because `is_home()` is true for it; no watcher, no free-space query |
+| Guards | `is_home()` stays true, so paste/new/delete guards keep Gallery read-only; `preview_panel` treats it as a file page, not the empty Home page |
+| Search | `Action::StartSearch` uses `dirs::picture_dir()` as the root when the tab is Gallery |
+| Thumbnails | `shell_image` first; on failure `images::decode_photo` decodes png/jpg/gif/webp/bmp/tiff locally (≤48 MB) so offline/OneDrive placeholders still render |
+
+**WSL** (`wsl.rs`) feeds the sidebar "Linux" node:
+
+- `wsl::distros()` runs `wsl.exe --list --quiet` with `WSL_UTF8=1`, falls back to UTF-16LE decoding,
+  filters service distros (`docker-desktop*`), and caches the result for 10 s.
+- Each distro root is `\\wsl.localhost\<name>`; rows reuse `nav_row` + the normal directory pipeline, so
+  browsing, sorting and the address bar work without a second code path.
+- On non-Windows targets `wsl.rs` returns an empty list, so the node is hidden.
+
 ---
 
 ## 11. Theme, fonts, DPI
@@ -373,14 +401,47 @@ Known asymmetries (do not "fix" by assuming symmetry): `open_terminal` returns `
 - **`Pal`** (`app.rs:489-568`) holds Explorer-measured chrome colors (tab strip, nav row, content, status,
   hover, selection); if a scheme is active and its brightness matches, scheme colors are used, else the
   hardcoded Explorer grays.
-- **Fonts** (`setup_fonts`, `app.rs:380-420`): Windows prepends `segoeui.ttf`, appends `seguisym.ttf`;
+- **Fonts** (`setup_fonts`, `app.rs:413-470`): the UI uses Explorer's own font — `SegUIVar.ttf`
+  (Segoe UI Variable, default Regular Text instance) on Windows 11, `segoeui.ttf` on Windows 10.
+  egui's `Ubuntu-Light` is dropped from the proportional family so glyphs missing from Segoe cannot
+  fall back to a lighter face and change stroke weight; `seguisym.ttf` is the symbol fallback.
   Linux prepends the desktop UI font (`gsettings font-name` / `fc-match sans-serif`). A `fluent` family
   maps UI glyphs: `SegoeIcons.ttf` (Win11) or `segmdl2.ttf` (Win10); Linux uses bundled
   `assets/fluent-icons.ttf`. CJK fallbacks (`msyh.ttc`, `malgun.ttf`, optionally `YuGothM.ttc`) are loaded
-  on a background thread at lowest priority (`app.rs:424-461`).
-- **DPI**: egui/winit supply `pixels_per_point`. Icon sizes are requested as
-  `px_bucket(logical * ppp)` with buckets `{16,24,32,48,64,96,128,256,512}` (`app.rs:972-980`). Startup
+  on a background thread at lowest priority (`app.rs:480-518`).
+- **Text weight**: a single regular family is used everywhere; there is no semibold family and no bold
+  menu row (`menu::Node::bold` was removed).
+- **Text size** is *not* hardcoded: `system::message_font_px()` reads `NONCLIENTMETRICSW.lfMessageFont.lfHeight`
+  (12 px at 100 % DPI, 19 px at the "Text size" setting 162 %), which is exactly what Explorer draws.
+  `text_factor()` (`app.rs:955-960`) turns that into a ratio against the 14 px design base and every text
+  size, row height, toolbar height and nav-pane width is derived from it. `text_size()` then snaps the
+  result to a **whole device pixel** — a half-pixel em size spreads stems across two pixel columns and only
+  a couple of letters per word stay sharp. Sizes never go below 11 pt.
+- **Text rasterization** comes from a vendored, patched `epaint` (`vendor/epaint`, wired through
+  `[patch.crates-io]` in `Cargo.toml`). Stock epaint rasterizes with grayscale antialiasing only; at 19 px
+  that leaves a ~20 % coverage halo which makes Explorer-comparable text look bold and blurry (ClearType
+  in Windows uses subpixel coverage and has ~15 % less ink). `sharpen_coverage()` in
+  `vendor/epaint/src/text/font.rs` drops sub-threshold coverage before it enters the atlas, which brings
+  measured ink density to ClearType level. The crate must stay on the same 0.31.x version as `eframe`.
+- **DPI**: egui/winit supply `pixels_per_point`. The app keeps `zoom_factor = 1.0` and disables egui's
+  keyboard zoom (Ctrl +, Ctrl -, Ctrl 0) in `apply_system_scale`, so the scale is exactly the Windows
+  DPI scale used by File Explorer. Icon sizes are requested as
+  `px_bucket(logical * ppp)` with buckets `{16,24,32,48,64,96,128,256,512}` (`app.rs:1080-1088`). Startup
   prefetch uses *system* DPI (`shell::system_scale`), which can mismatch per-monitor DPI.
+- **Details columns** all have draggable dividers (`TableBuilder::resizable(true)`; every column is
+  `.resizable(true)` with `at_least`/`at_most` thresholds, the trailing invisible `remainder()` column soaks
+  up leftover width). Initial widths are measured from content at the current font
+  (`px("00.00.0000 00:00")`, `px("Microsoft Edge PDF Document")`, ...), so a fresh profile shows most values
+  unclipped; Name gets ~42 % of the table and any width the Type column does not need. Widths live in egui
+  persisted memory (`app.ron`, `egui_extras` `serde` feature), and double-clicking a divider fits that column
+  to its content. Header labels are left-aligned for Name and right-aligned for Date modified/Type/Size;
+  cell text keeps Name/Date/Type left and Size right. The table id is salted with a `_boot` variant for the
+  first passes because side-panel widths are not known on frame 0 — creating the column state there would
+  freeze bogus widths (`details_view`, `app.rs:5300-5400`).
+- **Restored window guard**: `App::repair_restored_window` (`app.rs:1830-1870`) un-minimizes/centres a
+  stored window that is off-screen, maximized oddly or shrunk below 700×420, and `App::save` rewrites the
+  last good `"window"` entry instead of persisting a minimized rect. `good_window` ignores `-32000`
+  coordinates.
 - No Mica/acrylic/rounded-corner DWM attributes; the only DWM calls are cloaking and accent color.
 
 ---

@@ -9,6 +9,9 @@ use std::process::Command;
 use windows_sys::Win32::Storage::FileSystem::{
     GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW,
 };
+use windows_sys::Win32::System::Registry::{
+    HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_SZ,
+};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows_sys::Win32::UI::Shell::{ShellExecuteExW, SHELLEXECUTEINFOW};
 
@@ -76,7 +79,12 @@ pub fn drives() -> Vec<DriveInfo> {
             format!("{vol} ({letter}:)")
         };
         let (free, total) = disk_space(&root).unwrap_or((0, 0));
-        out.push(DriveInfo { root, label, free, total });
+        out.push(DriveInfo {
+            root,
+            label,
+            free,
+            total,
+        });
     }
     out
 }
@@ -167,16 +175,25 @@ const DROPEFFECT_MOVE: u32 = 2;
 
 pub fn clipboard_set_files(paths: &[PathBuf], cut: bool) -> bool {
     use clipboard_win::{options::NoClear, raw, Clipboard};
-    let Ok(_clip) = Clipboard::new_attempts(10) else { return false };
+    let Ok(_clip) = Clipboard::new_attempts(10) else {
+        return false;
+    };
     if raw::empty().is_err() {
         return false;
     }
-    let list: Vec<String> = paths.iter().map(|p| p.to_string_lossy().into_owned()).collect();
+    let list: Vec<String> = paths
+        .iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
     if raw::set_file_list_with(&list, NoClear).is_err() {
         return false;
     }
     if let Some(fmt) = raw::register_format("Preferred DropEffect") {
-        let effect = if cut { DROPEFFECT_MOVE } else { DROPEFFECT_COPY };
+        let effect = if cut {
+            DROPEFFECT_MOVE
+        } else {
+            DROPEFFECT_COPY
+        };
         let _ = raw::set_without_clear(fmt.get(), &effect.to_le_bytes());
     }
     true
@@ -215,11 +232,19 @@ use std::os::windows::io::FromRawHandle;
 use std::sync::atomic::{AtomicIsize, Ordering::SeqCst};
 use std::sync::Mutex;
 
-use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, HANDLE, INVALID_HANDLE_VALUE};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, GetLastError, ERROR_PIPE_BUSY, ERROR_PIPE_CONNECTED, HANDLE, INVALID_HANDLE_VALUE,
+};
 use windows_sys::Win32::Storage::FileSystem::{FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_DUPLEX};
-use windows_sys::Win32::System::Pipes::{ConnectNamedPipe, CreateNamedPipeW, WaitNamedPipeW, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT};
+use windows_sys::Win32::System::Pipes::{
+    ConnectNamedPipe, CreateNamedPipeW, WaitNamedPipeW, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE,
+    PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+};
 use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
-use windows_sys::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, IsIconic, SetForegroundWindow, ShowWindow, ASFW_ANY, SW_HIDE, SW_RESTORE, SW_SHOW};
+use windows_sys::Win32::UI::WindowsAndMessaging::{
+    AllowSetForegroundWindow, IsIconic, SetForegroundWindow, ShowWindow, ASFW_ANY, SW_HIDE,
+    SW_RESTORE, SW_SHOW,
+};
 
 /// Gizlenip bekleyen pencere; 0 ise pencere açık ya da bekleme kapalı
 static PARKED: AtomicIsize = AtomicIsize::new(0);
@@ -231,20 +256,30 @@ fn pipe_name() -> Vec<u16> {
     let mut session = 0;
     unsafe { ProcessIdToSessionId(std::process::id(), &mut session) };
     let user = std::env::var("USERNAME").unwrap_or_default();
-    wide(OsStr::new(&format!(r"\\.\pipe\SwiftExplorer-{session}-{user}")))
+    wide(OsStr::new(&format!(
+        r"\\.\pipe\SwiftExplorer-{session}-{user}"
+    )))
 }
 
 /// Gizlenip bekleyen bir süreç varsa açılışı ona devreder. `true` dönerse pencere
 /// o süreçte açıldı, bu süreç çıkabilir.
 pub fn hand_off(start: Option<&Path>) -> bool {
-    let Some(mut pipe) = connect() else { return false };
-    let dir: Vec<u16> = start.and_then(|p| std::path::absolute(p).ok()).map(|p| p.as_os_str().encode_wide().collect()).unwrap_or_default();
+    let Some(mut pipe) = connect() else {
+        return false;
+    };
+    let dir: Vec<u16> = start
+        .and_then(|p| std::path::absolute(p).ok())
+        .map(|p| p.as_os_str().encode_wide().collect())
+        .unwrap_or_default();
     let mut msg = ((dir.len() * 2) as u32).to_le_bytes().to_vec();
     msg.extend(dir.iter().flat_map(|c| c.to_le_bytes()));
     // Kullanıcının başlattığı süreç öne çıkma hakkına sahip; bekleyen sürece devreder
     unsafe { AllowSetForegroundWindow(ASFW_ANY) };
     let mut ok = [0u8];
-    pipe.write_all(&msg).and_then(|_| pipe.read_exact(&mut ok)).is_ok() && ok[0] == 1
+    pipe.write_all(&msg)
+        .and_then(|_| pipe.read_exact(&mut ok))
+        .is_ok()
+        && ok[0] == 1
 }
 
 /// Sonraki açılışları dinleyen bir süreç var mı (pencere açık ya da gizli)
@@ -256,7 +291,11 @@ fn connect() -> Option<std::fs::File> {
     let name = pipe_name();
     let path = OsString::from_wide(&name[..name.len() - 1]);
     for _ in 0..3 {
-        match std::fs::OpenOptions::new().read(true).write(true).open(&path) {
+        match std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+        {
             Ok(f) => return Some(f),
             Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY as i32) => unsafe {
                 WaitNamedPipeW(name.as_ptr(), 200);
@@ -268,8 +307,24 @@ fn connect() -> Option<std::fs::File> {
 }
 
 fn create_pipe(name: &[u16], first: bool) -> HANDLE {
-    let mode = PIPE_ACCESS_DUPLEX | if first { FILE_FLAG_FIRST_PIPE_INSTANCE } else { 0 };
-    unsafe { CreateNamedPipeW(name.as_ptr(), mode, PIPE_TYPE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS, PIPE_UNLIMITED_INSTANCES, 512, 512, 0, std::ptr::null()) }
+    let mode = PIPE_ACCESS_DUPLEX
+        | if first {
+            FILE_FLAG_FIRST_PIPE_INSTANCE
+        } else {
+            0
+        };
+    unsafe {
+        CreateNamedPipeW(
+            name.as_ptr(),
+            mode,
+            PIPE_TYPE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+            PIPE_UNLIMITED_INSTANCES,
+            512,
+            512,
+            0,
+            std::ptr::null(),
+        )
+    }
 }
 
 /// Sonraki açılışları dinler. Boruyu başka bir süreç tutuyorsa `false` döner;
@@ -285,7 +340,8 @@ pub fn serve(ctx: egui::Context) -> bool {
     std::thread::spawn(move || {
         let mut h = first as HANDLE;
         loop {
-            let connected = unsafe { ConnectNamedPipe(h, std::ptr::null_mut()) } != 0 || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
+            let connected = unsafe { ConnectNamedPipe(h, std::ptr::null_mut()) } != 0
+                || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
             // Bu istek işlenirken gelen açılış "boru yok" görüp ayrı süreç başlatmasın
             let next = create_pipe(&name, false);
             if connected {
@@ -315,15 +371,26 @@ fn answer(mut pipe: std::fs::File, ctx: &egui::Context) {
     if pipe.read_exact(&mut buf).is_err() {
         return;
     }
-    let dir: Vec<u16> = buf.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let dir: Vec<u16> = buf
+        .chunks_exact(2)
+        .map(|c| u16::from_le_bytes([c[0], c[1]]))
+        .collect();
     let hwnd = PARKED.swap(0, SeqCst);
     if hwnd != 0 {
-        *REOPEN.lock().unwrap() = Some((!dir.is_empty()).then(|| PathBuf::from(OsString::from_wide(&dir))));
+        *REOPEN.lock().unwrap() =
+            Some((!dir.is_empty()).then(|| PathBuf::from(OsString::from_wide(&dir))));
         // İlk kare eski içeriği göstermesin; arayüz yeni içerik hazır olunca açar
         crate::shell::set_cloak(hwnd, true);
         let h = hwnd as windows_sys::Win32::Foundation::HWND;
         unsafe {
-            ShowWindow(h, if IsIconic(h) != 0 { SW_RESTORE } else { SW_SHOW });
+            ShowWindow(
+                h,
+                if IsIconic(h) != 0 {
+                    SW_RESTORE
+                } else {
+                    SW_SHOW
+                },
+            );
             SetForegroundWindow(h);
         }
         ctx.request_repaint();
@@ -360,29 +427,125 @@ const RUN_VALUE: &str = "SwiftExplorer";
 pub fn autostart() -> bool {
     use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
     let (key, value) = (wide(OsStr::new(RUN_KEY)), wide(OsStr::new(RUN_VALUE)));
-    unsafe { RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), value.as_ptr(), RRF_RT_REG_SZ, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut()) == 0 }
+    unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        ) == 0
+    }
 }
 
 pub fn set_autostart(on: bool) {
-    use windows_sys::Win32::System::Registry::{RegDeleteKeyValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ};
+    use windows_sys::Win32::System::Registry::{
+        RegDeleteKeyValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ,
+    };
     let (key, value) = (wide(OsStr::new(RUN_KEY)), wide(OsStr::new(RUN_VALUE)));
     if !on {
         unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), value.as_ptr()) };
         return;
     }
-    let Ok(exe) = std::env::current_exe() else { return };
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
     let mut cmd = OsString::from("\"");
     cmd.push(exe.as_os_str());
     cmd.push(format!("\" {BACKGROUND_ARG}"));
     let data = wide(&cmd);
-    unsafe { RegSetKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), value.as_ptr(), REG_SZ, data.as_ptr().cast(), (data.len() * 2) as u32) };
+    unsafe {
+        RegSetKeyValueW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            value.as_ptr(),
+            REG_SZ,
+            data.as_ptr().cast(),
+            (data.len() * 2) as u32,
+        )
+    };
+}
+
+// ---------- PowerToys Peek: seçili dosyayı Peek penceresinde açar (Boşluk) ----------
+
+/// Kayıt defterinden dize değeri okur (REG_SZ), yoksa None.
+fn reg_string(hroot: HKEY, key: &str, value: &str) -> Option<String> {
+    use windows_sys::Win32::System::Registry::RegGetValueW;
+    let (k, v) = (wide(OsStr::new(key)), wide(OsStr::new(value)));
+    let mut buf = [0u16; 512];
+    let mut len = (buf.len() * 2) as u32;
+    let ok = unsafe {
+        RegGetValueW(
+            hroot,
+            k.as_ptr(),
+            v.as_ptr(),
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            buf.as_mut_ptr().cast(),
+            &mut len,
+        ) == 0
+    };
+    if !ok {
+        return None;
+    }
+    // len dönen bayt sayısıdır; sonlandırıcı null dahil olabilir
+    let n = ((len as usize) / 2).min(buf.len() - 1);
+    let s = String::from_utf16_lossy(&buf[..n]);
+    let s = s.trim_end_matches('\0');
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.to_string())
+    }
+}
+
+/// PowerToys Peek çalıştırılabilirini bulur.
+fn peek_exe() -> Option<PathBuf> {
+    const PT_KEY: &str = r"Software\Microsoft\PowerToys";
+    const EXE: &str = r"WinUI3Apps\PowerToys.Peek.UI.exe";
+    // Kurulum yolu kayıt defterinde yazılıdır (makine başına ya da kullanıcı başına)
+    for h in [HKEY_LOCAL_MACHINE, HKEY_CURRENT_USER] {
+        if let Some(dir) = reg_string(h, PT_KEY, "Install Path") {
+            let p = Path::new(&dir).join(EXE);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+    }
+    // Kayıt defteri yoksa bilinen varsayılan kurulum yerleri
+    if let Some(lad) = std::env::var_os("LOCALAPPDATA") {
+        let p = PathBuf::from(lad).join(r"PowerToys").join(EXE);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    if let Some(pf) = std::env::var_os("ProgramFiles") {
+        let p = PathBuf::from(pf).join(r"PowerToys").join(EXE);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Dosyayı PowerToys Peek ile açar; bulunamazsa false döner.
+pub fn peek_file(path: &Path) -> bool {
+    let Some(exe) = peek_exe() else {
+        return false;
+    };
+    Command::new(exe).arg(path).spawn().is_ok()
 }
 
 // ---------- Varsayılan dosya gezgini: klasörler, sürücüler ve Win+E bu uygulamada açılır
 
 const VERB: &str = "SwiftExplorer";
 /// Klasör ve sürücülerin varsayılan eylemi bu anahtarların (Default) değeridir
-const SHELL_KEYS: [&str; 2] = [r"Software\Classes\Directory\shell", r"Software\Classes\Drive\shell"];
+const SHELL_KEYS: [&str; 2] = [
+    r"Software\Classes\Directory\shell",
+    r"Software\Classes\Drive\shell",
+];
 /// Win+E'nin açtığı "Bu bilgisayar" penceresi
 const WIN_E_KEY: &str = r"Software\Classes\CLSID\{52205fd8-5dfb-447d-801a-d0b52f2e83e1}";
 
@@ -393,7 +556,17 @@ fn reg_get(key: &str, value: Option<&str>) -> Option<String> {
     let value_ptr = value.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
     let mut buf = [0u16; 1024];
     let mut len = (buf.len() * 2) as u32;
-    let r = unsafe { RegGetValueW(HKEY_CURRENT_USER, key.as_ptr(), value_ptr, RRF_RT_REG_SZ, std::ptr::null_mut(), buf.as_mut_ptr().cast(), &mut len) };
+    let r = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            value_ptr,
+            RRF_RT_REG_SZ,
+            std::ptr::null_mut(),
+            buf.as_mut_ptr().cast(),
+            &mut len,
+        )
+    };
     (r == 0).then(|| String::from_utf16_lossy(&buf[..(len as usize / 2).saturating_sub(1)]))
 }
 
@@ -403,7 +576,16 @@ fn reg_set(key: &str, value: Option<&str>, data: &OsStr) -> bool {
     let value = value.map(|v| wide(OsStr::new(v)));
     let value_ptr = value.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
     let data = wide(data);
-    unsafe { RegSetKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), value_ptr, REG_SZ, data.as_ptr().cast(), (data.len() * 2) as u32) == 0 }
+    unsafe {
+        RegSetKeyValueW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            value_ptr,
+            REG_SZ,
+            data.as_ptr().cast(),
+            (data.len() * 2) as u32,
+        ) == 0
+    }
 }
 
 fn reg_delete_value(key: &str) {
@@ -430,8 +612,13 @@ fn launch_command(arg: &str) -> Option<OsString> {
 
 /// Kayıtlı komut bu exe'yi gösteriyor mu (exe taşındıysa kayıt eskimiştir)
 pub fn is_default_file_manager() -> bool {
-    let Some(cmd) = launch_command(" \"%1\"") else { return false };
-    SHELL_KEYS.iter().all(|k| reg_get(k, None).as_deref() == Some(VERB) && reg_get(&format!(r"{k}\{VERB}\command"), None).is_some_and(|c| OsStr::new(&c) == cmd))
+    let Some(cmd) = launch_command(" \"%1\"") else {
+        return false;
+    };
+    SHELL_KEYS.iter().all(|k| {
+        reg_get(k, None).as_deref() == Some(VERB)
+            && reg_get(&format!(r"{k}\{VERB}\command"), None).is_some_and(|c| OsStr::new(&c) == cmd)
+    })
 }
 
 /// Yalnızca bu kullanıcı için (HKCU) ayarlar; geri alınca yazdığı her şeyi siler.
@@ -439,15 +626,29 @@ pub fn is_default_file_manager() -> bool {
 pub fn set_default_file_manager(on: bool, _previous: Option<&str>) -> Option<String> {
     use windows_sys::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST};
     if on {
-        let (Some(open), Some(bare)) = (launch_command(" \"%1\""), launch_command("")) else { return None };
+        let (Some(open), Some(bare)) = (launch_command(" \"%1\""), launch_command("")) else {
+            return None;
+        };
         for k in SHELL_KEYS {
-            reg_set(&format!(r"{k}\{VERB}"), None, OsStr::new(crate::i18n::t("Swift Explorer ile aç")));
+            reg_set(
+                &format!(r"{k}\{VERB}"),
+                None,
+                OsStr::new(crate::i18n::t("Swift Explorer ile aç")),
+            );
             reg_set(&format!(r"{k}\{VERB}\command"), None, &open);
             reg_set(k, None, OsStr::new(VERB));
         }
         // Win+E: DelegateExecute boş olunca Explorer komutu çalıştırır
-        reg_set(&format!(r"{WIN_E_KEY}\shell\opennewwindow\command"), None, &bare);
-        reg_set(&format!(r"{WIN_E_KEY}\shell\opennewwindow\command"), Some("DelegateExecute"), OsStr::new(""));
+        reg_set(
+            &format!(r"{WIN_E_KEY}\shell\opennewwindow\command"),
+            None,
+            &bare,
+        );
+        reg_set(
+            &format!(r"{WIN_E_KEY}\shell\opennewwindow\command"),
+            Some("DelegateExecute"),
+            OsStr::new(""),
+        );
     } else {
         for k in SHELL_KEYS {
             if reg_get(k, None).as_deref() == Some(VERB) {
@@ -456,11 +657,22 @@ pub fn set_default_file_manager(on: bool, _previous: Option<&str>) -> Option<Str
             reg_delete_tree(&format!(r"{k}\{VERB}"));
         }
         // Başka bir program yazdıysa dokunma
-        let ours = reg_get(&format!(r"{WIN_E_KEY}\shell\opennewwindow\command"), None).is_some_and(|c| c.to_lowercase().contains("swiftexplorer") || c.to_lowercase().contains("swift-explorer"));
+        let ours =
+            reg_get(&format!(r"{WIN_E_KEY}\shell\opennewwindow\command"), None).is_some_and(|c| {
+                c.to_lowercase().contains("swiftexplorer")
+                    || c.to_lowercase().contains("swift-explorer")
+            });
         if ours {
             reg_delete_tree(WIN_E_KEY);
         }
     }
-    unsafe { SHChangeNotify(SHCNE_ASSOCCHANGED as i32, SHCNF_IDLIST, std::ptr::null(), std::ptr::null()) };
+    unsafe {
+        SHChangeNotify(
+            SHCNE_ASSOCCHANGED as i32,
+            SHCNF_IDLIST,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
     None
 }

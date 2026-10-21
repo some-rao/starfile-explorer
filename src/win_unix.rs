@@ -34,13 +34,29 @@ fn unescape(s: &str) -> String {
 /// Kök ve kullanıcının taktığı diskler (/media, /run/media, /mnt altındakiler)
 pub fn mount_roots() -> Vec<PathBuf> {
     let mut v = vec![PathBuf::from("/")];
-    let Ok(text) = std::fs::read_to_string("/proc/self/mounts") else { return v };
+    let Ok(text) = std::fs::read_to_string("/proc/self/mounts") else {
+        return v;
+    };
     for line in text.lines() {
         let mut f = line.split_whitespace();
-        let (Some(_dev), Some(mnt), Some(fstype)) = (f.next(), f.next(), f.next()) else { continue };
+        let (Some(_dev), Some(mnt), Some(fstype)) = (f.next(), f.next(), f.next()) else {
+            continue;
+        };
         let mnt = unescape(mnt);
-        let user_mount = mnt.starts_with("/media/") || mnt.starts_with("/run/media/") || mnt.starts_with("/mnt/");
-        let virtual_fs = matches!(fstype, "tmpfs" | "proc" | "sysfs" | "devtmpfs" | "autofs" | "squashfs" | "overlay" | "fuse.portal");
+        let user_mount = mnt.starts_with("/media/")
+            || mnt.starts_with("/run/media/")
+            || mnt.starts_with("/mnt/");
+        let virtual_fs = matches!(
+            fstype,
+            "tmpfs"
+                | "proc"
+                | "sysfs"
+                | "devtmpfs"
+                | "autofs"
+                | "squashfs"
+                | "overlay"
+                | "fuse.portal"
+        );
         if user_mount && !virtual_fs && !v.iter().any(|p| p.as_os_str() == mnt.as_str()) {
             v.push(PathBuf::from(mnt));
         }
@@ -63,10 +79,17 @@ pub fn drives() -> Vec<DriveInfo> {
             let label = if root == Path::new("/") {
                 format!("{} (/)", crate::i18n::t("Yerel Disk"))
             } else {
-                root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| root.display().to_string())
+                root.file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| root.display().to_string())
             };
             let (free, total) = disk_space(&root).unwrap_or((0, 0));
-            DriveInfo { root, label, free, total }
+            DriveInfo {
+                root,
+                label,
+                free,
+                total,
+            }
         })
         .collect()
 }
@@ -79,13 +102,18 @@ pub fn disk_space(path: &Path) -> Option<(u64, u64)> {
     if unsafe { libc::statvfs(c.as_ptr(), &mut st) } != 0 {
         return None;
     }
-    let frsize = if st.f_frsize > 0 { st.f_frsize as u64 } else { st.f_bsize as u64 };
+    let frsize = if st.f_frsize > 0 {
+        st.f_frsize as u64
+    } else {
+        st.f_bsize as u64
+    };
     Some((st.f_bavail as u64 * frsize, st.f_blocks as u64 * frsize))
 }
 
 /// Dosyanın MIME türü: içeriğe bakan `xdg-mime`, olmazsa uzantıdan
 pub fn mime_of(path: &Path) -> Option<String> {
-    xdg_mime(&["query", "filetype", &path.display().to_string()]).or_else(|| mime_guess::from_path(path).first_raw().map(String::from))
+    xdg_mime(&["query", "filetype", &path.display().to_string()])
+        .or_else(|| mime_guess::from_path(path).first_raw().map(String::from))
 }
 
 fn xdg_mime(args: &[&str]) -> Option<String> {
@@ -103,7 +131,8 @@ pub fn default_app_id(mime: &str) -> Option<String> {
 pub fn default_app(path: &Path) -> Option<crate::properties::AppInfo> {
     let mime = mime_of(path)?;
     let id = default_app_id(&mime)?;
-    let name = crate::desktop_apps::app_name(&id).unwrap_or_else(|| id.trim_end_matches(".desktop").to_string());
+    let name = crate::desktop_apps::app_name(&id)
+        .unwrap_or_else(|| id.trim_end_matches(".desktop").to_string());
     Some(crate::properties::AppInfo { name })
 }
 
@@ -143,20 +172,40 @@ fn host_command_in(program: &str, dir: Option<&Path>) -> Command {
 /// Program host'ta var mı. Flatpak dışında bunu `spawn` hatası zaten söyler; içinde
 /// `flatpak-spawn` her zaman başlar, bu yüzden önce sorulur.
 fn host_has(program: &str) -> bool {
-    !in_flatpak() || host_command("sh").args(["-c", "command -v \"$1\" >/dev/null", "sh", program]).status().is_ok_and(|s| s.success())
+    !in_flatpak()
+        || host_command("sh")
+            .args(["-c", "command -v \"$1\" >/dev/null", "sh", program])
+            .status()
+            .is_ok_and(|s| s.success())
 }
 
-const TERMINALS: [&str; 11] = ["x-terminal-emulator", "gnome-terminal", "kgx", "ptyxis", "konsole", "xfce4-terminal", "kitty", "alacritty", "foot", "wezterm", "xterm"];
+const TERMINALS: [&str; 11] = [
+    "x-terminal-emulator",
+    "gnome-terminal",
+    "kgx",
+    "ptyxis",
+    "konsole",
+    "xfce4-terminal",
+    "kitty",
+    "alacritty",
+    "foot",
+    "wezterm",
+    "xterm",
+];
 
 pub fn open_terminal(dir: &Path) -> bool {
     let mut candidates: Vec<String> = std::env::var("TERMINAL").into_iter().collect();
     candidates.extend(TERMINALS.map(String::from));
-    candidates.iter().any(|c| host_has(c) && host_command_in(c, Some(dir)).spawn().is_ok())
+    candidates
+        .iter()
+        .any(|c| host_has(c) && host_command_in(c, Some(dir)).spawn().is_ok())
 }
 
 /// Adres çubuğuna yazılınca o klasörde açılan terminaller: "terminal" varsayılanı açar
 pub fn is_terminal(name: &str) -> bool {
-    name == "terminal" || TERMINALS.contains(&name) || std::env::var("TERMINAL").is_ok_and(|t| t == name)
+    name == "terminal"
+        || TERMINALS.contains(&name)
+        || std::env::var("TERMINAL").is_ok_and(|t| t == name)
 }
 
 /// `name` terminalini `dir` klasöründe, varsa `args` ile başlatır
@@ -164,7 +213,11 @@ pub fn run_terminal(name: &str, args: &str, dir: &Path) -> bool {
     if name == "terminal" {
         return open_terminal(dir);
     }
-    host_has(name) && host_command_in(name, Some(dir)).args(args.split_whitespace()).spawn().is_ok()
+    host_has(name)
+        && host_command_in(name, Some(dir))
+            .args(args.split_whitespace())
+            .spawn()
+            .is_ok()
 }
 
 /// Windows'ta tuş doğrudan sorulur; burada Ctrl+V egui'nin yapıştırma olayından gelir.
@@ -183,7 +236,11 @@ pub fn note_paste_text(text: &str) {
 
 /// Panoya yazılacak metin: dosya yöneticileri bunu yol listesi olarak tanır.
 pub fn files_as_text(paths: &[PathBuf]) -> String {
-    paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n")
+    paths
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub fn clipboard_set_files(_paths: &[PathBuf], _cut: bool) -> bool {
@@ -264,6 +321,10 @@ pub fn autostart() -> bool {
 
 pub fn set_autostart(_on: bool) {}
 
+pub fn peek_file(_path: &Path) -> bool {
+    false
+}
+
 // ---------- Varsayılan dosya yöneticisi: klasörler bu uygulamada açılır
 
 const DESKTOP_ID: &str = "io.github.misutesu_desu.SwiftExplorer.desktop";
@@ -274,7 +335,12 @@ pub fn is_default_file_manager() -> bool {
 
 /// Açarken önceki varsayılanı döndürür; kapatırken `previous` geri yüklenir
 pub fn set_default_file_manager(on: bool, previous: Option<&str>) -> Option<String> {
-    let set = |id: &str| host_command("xdg-mime").args(["default", id, "inode/directory"]).status().is_ok_and(|s| s.success());
+    let set = |id: &str| {
+        host_command("xdg-mime")
+            .args(["default", id, "inode/directory"])
+            .status()
+            .is_ok_and(|s| s.success())
+    };
     if on {
         let before = default_app_id("inode/directory").filter(|id| id != DESKTOP_ID);
         set(DESKTOP_ID);

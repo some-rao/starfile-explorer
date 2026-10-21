@@ -52,26 +52,68 @@ pub fn repaint() {
 }
 
 fn produce(req: &Req) -> Option<egui::ColorImage> {
-    // Shell ara sıra (özellikle aynı anda çok istekte) başarısız olur; birkaç kez dene
-    let mut img = None;
-    for attempt in 0..3 {
-        img = crate::shell::shell_image(&req.path, req.size, req.icon_only);
-        if img.is_some() {
-            break;
+    // Küçük resim: önce kabuk sağlayıcısı (Explorer önbelleği, video ve ofis
+    // dosyaları dahil), olmazsa fotoğrafı kendimiz küçültürüz. Böylece kabuk
+    // sağlayıcısının üretemediği (çevrimdışı OneDrive, bazı PNG/JPG) resimler
+    // Galeri'de boş ikon yerine gerçek küçük resimle görünür.
+    if !req.icon_only {
+        for attempt in 0..3 {
+            if let Some(img) = crate::shell::shell_image(&req.path, req.size, false) {
+                return Some(img);
+            }
+            if attempt < 2 {
+                std::thread::sleep(std::time::Duration::from_millis(30));
+            }
         }
-        if !req.icon_only && attempt == 1 {
-            // Küçük resim yoksa ikona düş
-            img = crate::shell::shell_image(&req.path, req.size, true);
-            break;
+        if let Some(img) = decode_photo(&req.path, req.size) {
+            return Some(img);
         }
-        std::thread::sleep(std::time::Duration::from_millis(30));
     }
-    img
+    // Simge: birkaç kez dene, sonra pes et
+    for attempt in 0..3 {
+        if let Some(img) = crate::shell::shell_image(&req.path, req.size, true) {
+            return Some(img);
+        }
+        if attempt < 2 {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+    }
+    None
+}
+
+/// Kabuk küçük resim üretemediğinde desteklenen fotoğraf biçimlerini kendimiz
+/// çözeriz. Tam boy görüntü bellekte açıldığı için büyük dosyalarda sınır koyarız.
+fn decode_photo(path: &Path, size: i32) -> Option<egui::ColorImage> {
+    const MAX_BYTES: u64 = 48 << 20;
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    if !matches!(
+        ext.as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff"
+    ) {
+        return None;
+    }
+    let meta = std::fs::metadata(path).ok()?;
+    if meta.len() > MAX_BYTES {
+        return None;
+    }
+    let img = image::open(path).ok()?;
+    let side = size.clamp(16, 1024) as u32;
+    let img = img.thumbnail(side, side).to_rgba8();
+    let (w, h) = img.dimensions();
+    Some(egui::ColorImage::from_rgba_unmultiplied(
+        [w as usize, h as usize],
+        img.as_raw(),
+    ))
 }
 
 fn workers() -> &'static Workers {
     WORKERS.get_or_init(|| {
-        let queue: Arc<(Mutex<Vec<Req>>, Condvar)> = Arc::new((Mutex::new(Vec::new()), Condvar::new()));
+        let queue: Arc<(Mutex<Vec<Req>>, Condvar)> =
+            Arc::new((Mutex::new(Vec::new()), Condvar::new()));
         let (tx, rx): (Sender<Done>, _) = channel();
         for _ in 0..4 {
             let q = queue.clone();
@@ -96,7 +138,9 @@ fn workers() -> &'static Workers {
                         let k = (req.path, req.size, req.icon_only);
                         match map.get_mut(&k) {
                             Some(Early::Pending(Some(_))) => {
-                                let Some(Early::Pending(Some(key))) = map.remove(&k) else { unreachable!() };
+                                let Some(Early::Pending(Some(key))) = map.remove(&k) else {
+                                    unreachable!()
+                                };
                                 key
                             }
                             Some(e) => {
@@ -115,7 +159,11 @@ fn workers() -> &'static Workers {
                 }
             });
         }
-        Workers { queue, tx, rx: Mutex::new(Some(rx)) }
+        Workers {
+            queue,
+            tx,
+            rx: Mutex::new(Some(rx)),
+        }
     })
 }
 
@@ -132,8 +180,16 @@ pub fn prefetch(items: Vec<EarlyKey>) {
         let mut early = EARLY.lock().unwrap();
         let map = early.get_or_insert_with(HashMap::new);
         for (path, size, icon_only) in items {
-            if map.insert((path.clone(), size, icon_only), Early::Pending(None)).is_none() {
-                reqs.push(Req { key: String::new(), path, size, icon_only });
+            if map
+                .insert((path.clone(), size, icon_only), Early::Pending(None))
+                .is_none()
+            {
+                reqs.push(Req {
+                    key: String::new(),
+                    path,
+                    size,
+                    icon_only,
+                });
             }
         }
     }
@@ -184,7 +240,11 @@ impl ImageCache {
     pub fn new(ctx: &egui::Context) -> ImageCache {
         let _ = UI_CTX.set(ctx.clone());
         let w = workers();
-        let rx = w.rx.lock().unwrap().take().expect("ImageCache yalnızca bir kez oluşturulur");
+        let rx =
+            w.rx.lock()
+                .unwrap()
+                .take()
+                .expect("ImageCache yalnızca bir kez oluşturulur");
         ImageCache {
             textures: HashMap::new(),
             unique: HashMap::new(),
@@ -201,12 +261,23 @@ impl ImageCache {
             t.used = self.frame;
             return t.img.clone();
         }
-        self.textures.insert(key.to_string(), Slot { img: Img::Pending, used: self.frame });
+        self.textures.insert(
+            key.to_string(),
+            Slot {
+                img: Img::Pending,
+                used: self.frame,
+            },
+        );
         if self.take_early(key, path, size, icon_only) {
             return Img::Pending;
         }
         let (m, cv) = &*self.queue;
-        m.lock().unwrap().push(Req { key: key.to_string(), path: path.to_path_buf(), size, icon_only });
+        m.lock().unwrap().push(Req {
+            key: key.to_string(),
+            path: path.to_path_buf(),
+            size,
+            icon_only,
+        });
         cv.notify_one();
         Img::Pending
     }
@@ -215,7 +286,9 @@ impl ImageCache {
     /// `poll`'da, değilse üretilince gelir. Yeni istek gerekmez.
     fn take_early(&mut self, key: &str, path: &Path, size: i32, icon_only: bool) -> bool {
         let mut early = EARLY.lock().unwrap();
-        let Some(map) = early.as_mut() else { return false };
+        let Some(map) = early.as_mut() else {
+            return false;
+        };
         let k = (path.to_path_buf(), size, icon_only);
         match map.get_mut(&k) {
             Some(Early::Pending(slot @ None)) => {
@@ -223,7 +296,9 @@ impl ImageCache {
                 true
             }
             Some(Early::Done(_)) => {
-                let Some(Early::Done(img)) = map.remove(&k) else { unreachable!() };
+                let Some(Early::Done(img)) = map.remove(&k) else {
+                    unreachable!()
+                };
                 let _ = self.tx.send((key.to_string(), img));
                 true
             }
@@ -234,7 +309,9 @@ impl ImageCache {
     /// Yüklenmeyi bekleyen görüntü var mı (açılışta pencereyi göstermek için)
     #[cfg_attr(not(windows), allow(dead_code))]
     pub fn busy(&self) -> bool {
-        self.textures.values().any(|t| matches!(t.img, Img::Pending))
+        self.textures
+            .values()
+            .any(|t| matches!(t.img, Img::Pending))
     }
 
     /// Bekleyen (henüz işlenmemiş) istekleri atar; klasör değişince eski istekler beklemesin.
@@ -252,6 +329,11 @@ impl ImageCache {
         *q = keep;
     }
 
+    /// Kuyrukta üretilmeyi bekleyen görüntü sayısı (geçici tanı için).
+    pub fn pending(&self) -> usize {
+        self.queue.0.lock().unwrap().len()
+    }
+
     pub fn poll(&mut self, ctx: &egui::Context) {
         self.frame += 1;
         while let Ok((key, img)) = self.rx.try_recv() {
@@ -259,7 +341,13 @@ impl ImageCache {
                 Some(i) => Img::Ready(self.texture_for(ctx, &key, i)),
                 None => Img::Failed,
             };
-            self.textures.insert(key, Slot { img, used: self.frame });
+            self.textures.insert(
+                key,
+                Slot {
+                    img,
+                    used: self.frame,
+                },
+            );
         }
         if self.unique_bytes > BUDGET_BYTES {
             self.evict();
@@ -267,7 +355,12 @@ impl ImageCache {
     }
 
     /// Aynı piksellere sahip bir doku varsa onu paylaşır, yoksa yükler
-    fn texture_for(&mut self, ctx: &egui::Context, key: &str, img: egui::ColorImage) -> egui::TextureHandle {
+    fn texture_for(
+        &mut self,
+        ctx: &egui::Context,
+        key: &str,
+        img: egui::ColorImage,
+    ) -> egui::TextureHandle {
         use std::hash::{BuildHasher, Hash, Hasher};
         let mut h = egui::ahash::RandomState::with_seeds(1, 2, 3, 4).build_hasher();
         img.size.hash(&mut h);
@@ -285,8 +378,14 @@ impl ImageCache {
 
     /// En uzun süredir çizilmeyenleri bütçenin %75'ine inene dek bırakır
     fn evict(&mut self) {
-        let mut order: Vec<(u64, String)> =
-            self.textures.iter().filter(|(_, s)| s.used < self.frame.saturating_sub(1) && !matches!(s.img, Img::Pending)).map(|(k, s)| (s.used, k.clone())).collect();
+        let mut order: Vec<(u64, String)> = self
+            .textures
+            .iter()
+            .filter(|(_, s)| {
+                s.used < self.frame.saturating_sub(1) && !matches!(s.img, Img::Pending)
+            })
+            .map(|(k, s)| (s.used, k.clone()))
+            .collect();
         order.sort_unstable();
         let target = BUDGET_BYTES / 4 * 3;
         for chunk in order.chunks(64) {
@@ -302,8 +401,17 @@ impl ImageCache {
 
     /// Artık hiçbir anahtarın göstermediği dokuları bırakır
     fn prune_unique(&mut self) {
-        let live: std::collections::HashSet<egui::TextureId> =
-            self.textures.values().filter_map(|s| if let Img::Ready(t) = &s.img { Some(t.id()) } else { None }).collect();
+        let live: std::collections::HashSet<egui::TextureId> = self
+            .textures
+            .values()
+            .filter_map(|s| {
+                if let Img::Ready(t) = &s.img {
+                    Some(t.id())
+                } else {
+                    None
+                }
+            })
+            .collect();
         let mut freed = 0;
         self.unique.retain(|_, (t, b)| {
             let keep = live.contains(&t.id());

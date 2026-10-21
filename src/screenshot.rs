@@ -24,13 +24,22 @@ struct Shot {
 static SHOT: Mutex<Option<Shot>> = Mutex::new(None);
 
 pub fn init() {
-    let Some(path) = std::env::var_os("SWIFT_EXPLORER_SCREENSHOT") else { return };
-    let delay = std::env::var("SWIFT_EXPLORER_SCREENSHOT_DELAY").ok().and_then(|s| s.parse().ok()).unwrap_or(4.0);
-    let size = std::env::var("SWIFT_EXPLORER_SCREENSHOT_SIZE").ok().and_then(|s| {
-        let (w, h) = s.split_once('x')?;
-        Some(egui::vec2(w.parse().ok()?, h.parse().ok()?))
-    });
-    let input = std::env::var("SWIFT_EXPLORER_SCREENSHOT_INPUT").map(|s| s.split(';').rev().map(str::to_string).collect()).unwrap_or_default();
+    let Some(path) = std::env::var_os("SWIFT_EXPLORER_SCREENSHOT") else {
+        return;
+    };
+    let delay = std::env::var("SWIFT_EXPLORER_SCREENSHOT_DELAY")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(4.0);
+    let size = std::env::var("SWIFT_EXPLORER_SCREENSHOT_SIZE")
+        .ok()
+        .and_then(|s| {
+            let (w, h) = s.split_once('x')?;
+            Some(egui::vec2(w.parse().ok()?, h.parse().ok()?))
+        });
+    let input = std::env::var("SWIFT_EXPLORER_SCREENSHOT_INPUT")
+        .map(|s| s.split(';').rev().map(str::to_string).collect())
+        .unwrap_or_default();
     let now = Instant::now();
     *SHOT.lock().unwrap() = Some(Shot {
         path: path.into(),
@@ -54,7 +63,9 @@ pub fn input_hook(raw: &mut egui::RawInput) {
     if Instant::now() < shot.next_input {
         return;
     }
-    let Some(action) = shot.input.pop() else { return };
+    let Some(action) = shot.input.pop() else {
+        return;
+    };
     shot.next_input = Instant::now() + Duration::from_millis(500);
     let modifiers = egui::Modifiers::NONE;
     let point = |p: &str| -> Option<egui::Pos2> {
@@ -67,14 +78,41 @@ pub fn input_hook(raw: &mut egui::RawInput) {
         .strip_prefix("rclick:")
         .and_then(point)
         .map(|p| (p, egui::PointerButton::Secondary))
-        .or_else(|| action.strip_prefix("click:").and_then(point).map(|p| (p, egui::PointerButton::Primary)))
+        .or_else(|| {
+            action
+                .strip_prefix("click:")
+                .and_then(point)
+                .map(|p| (p, egui::PointerButton::Primary))
+        })
     {
         raw.events.push(egui::Event::PointerMoved(pos));
-        raw.events.push(egui::Event::PointerButton { pos, button, pressed: true, modifiers });
-        shot.release = Some(egui::Event::PointerButton { pos, button, pressed: false, modifiers });
+        raw.events.push(egui::Event::PointerButton {
+            pos,
+            button,
+            pressed: true,
+            modifiers,
+        });
+        shot.release = Some(egui::Event::PointerButton {
+            pos,
+            button,
+            pressed: false,
+            modifiers,
+        });
     } else if let Some(key) = action.strip_prefix("key:").and_then(egui::Key::from_name) {
-        raw.events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
-        shot.release = Some(egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
+        raw.events.push(egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        });
+        shot.release = Some(egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: false,
+            repeat: false,
+            modifiers,
+        });
     }
 }
 

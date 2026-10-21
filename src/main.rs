@@ -7,18 +7,20 @@ mod fsutil;
 mod i18n;
 mod images;
 mod menu;
+mod newfile;
 #[cfg(not(windows))]
 mod properties;
 mod scheme;
 #[cfg(feature = "screenshot")]
 mod screenshot;
+#[cfg_attr(not(windows), path = "shell_unix.rs")]
+mod shell;
 mod system;
 mod tab;
 mod update;
-#[cfg_attr(not(windows), path = "shell_unix.rs")]
-mod shell;
 #[cfg_attr(not(windows), path = "win_unix.rs")]
 mod win;
+mod wsl;
 
 use std::path::PathBuf;
 
@@ -49,7 +51,9 @@ fn main() -> eframe::Result<()> {
         }
     }
     // Explorer sürücüyü "%1" ile "C:\" diye verir; Windows bunu C:" olarak ayrıştırır
-    let start = arg.filter(|_| !hidden).map(|a| PathBuf::from(a.trim_end_matches('"')));
+    let start = arg
+        .filter(|_| !hidden)
+        .map(|a| PathBuf::from(a.trim_end_matches('"')));
     if hidden && win::is_serving() || !hidden && win::hand_off(start.as_deref()) {
         return Ok(());
     }
@@ -69,7 +73,10 @@ fn main() -> eframe::Result<()> {
             .with_inner_size([1060.0, 640.0])
             .with_min_inner_size([640.0, 400.0])
             .with_drag_and_drop(true)
-            .with_icon(eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")).unwrap_or_default()),
+            .with_icon(
+                eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png"))
+                    .unwrap_or_default(),
+            ),
         ..Default::default()
     };
     #[cfg(windows)]
@@ -77,5 +84,9 @@ fn main() -> eframe::Result<()> {
     app::prefetch_startup(start.clone());
     #[cfg(feature = "screenshot")]
     screenshot::init();
-    eframe::run_native(APP_NAME, options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, start, hidden)))))
+    eframe::run_native(
+        APP_NAME,
+        options,
+        Box::new(move |cc| Ok(Box::new(app::App::new(cc, start, hidden)))),
+    )
 }

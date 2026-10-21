@@ -125,6 +125,9 @@ Sizes: `app.rs` 4526 lines · `fsutil.rs` 1134 · `properties.rs` 869 (Linux onl
 - **Update manifest is a single `windows.url`** with no architecture check; SHA-256 only, no signature.
 - **Date group labels are hardcoded Turkish** (`fsutil.rs:246`) and double as collapse keys.
 - **`ImageCache` may be constructed once per process** (`images.rs:187`); `App::new` must stay the only caller.
+- **`epaint` is vendored and patched** (`vendor/epaint`, `[patch.crates-io]`). It carries the glyph coverage
+  curve that keeps UI text as sharp as Explorer's. Bumping `eframe`/`egui` to a new minor version requires
+  copying the matching `epaint` release into `vendor/epaint` and re-applying `sharpen_coverage()`.
 
 ---
 

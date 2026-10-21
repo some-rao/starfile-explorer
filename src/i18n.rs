@@ -45,7 +45,13 @@ pub fn lang_code() -> &'static str {
 /// "de", "pt_BR.UTF-8", "zh-CN" gibi bir dil kodunun `LANGS` içindeki sırası
 pub fn lang_index(code: &str) -> Option<usize> {
     let code = code.to_ascii_lowercase();
-    if code.starts_with("zh") && !(code.starts_with("zh_cn") || code.starts_with("zh-cn") || code.starts_with("zh_sg") || code.starts_with("zh-sg") || code == "zh") {
+    if code.starts_with("zh")
+        && !(code.starts_with("zh_cn")
+            || code.starts_with("zh-cn")
+            || code.starts_with("zh_sg")
+            || code.starts_with("zh-sg")
+            || code == "zh")
+    {
         return None; // Geleneksel Çince için Basitleştirilmiş Çince yerine İngilizce
     }
     LANGS.iter().position(|(c, _)| code.starts_with(c))
@@ -54,7 +60,9 @@ pub fn lang_index(code: &str) -> Option<usize> {
 /// Sistem dili (LC_ALL, LC_MESSAGES, LANG); desteklenmiyorsa İngilizce
 #[cfg(not(windows))]
 pub fn system_lang() -> usize {
-    let lang = ["LC_ALL", "LC_MESSAGES", "LANG"].iter().find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()));
+    let lang = ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .iter()
+        .find_map(|k| std::env::var(k).ok().filter(|v| !v.is_empty()));
     lang.and_then(|l| lang_index(&l)).unwrap_or(EN)
 }
 
@@ -79,7 +87,17 @@ pub fn system_lang() -> usize {
 fn tables() -> &'static [HashMap<&'static str, &'static str>] {
     static MAPS: OnceLock<Vec<HashMap<&'static str, &'static str>>> = OnceLock::new();
     MAPS.get_or_init(|| {
-        let tables: &[&[(&str, &str)]] = &[&[], TABLE, de::TABLE, es::TABLE, fr::TABLE, pt::TABLE, ru::TABLE, zh::TABLE, ja::TABLE];
+        let tables: &[&[(&str, &str)]] = &[
+            &[],
+            TABLE,
+            de::TABLE,
+            es::TABLE,
+            fr::TABLE,
+            pt::TABLE,
+            ru::TABLE,
+            zh::TABLE,
+            ja::TABLE,
+        ];
         tables.iter().map(|t| t.iter().copied().collect()).collect()
     })
 }
@@ -91,7 +109,11 @@ pub fn t(s: &str) -> &str {
         return s;
     }
     let maps = tables();
-    maps[i].get(s).or_else(|| maps[EN].get(s)).copied().unwrap_or(s)
+    maps[i]
+        .get(s)
+        .or_else(|| maps[EN].get(s))
+        .copied()
+        .unwrap_or(s)
 }
 
 /// Yer tutuculu metin: `{}` sırayla, `{0}` `{1}` dizine göre doldurulur.
@@ -132,14 +154,35 @@ pub fn tf(key: &str, args: &[&dyn Display]) -> String {
 /// Kuralı olmayan dillerin metinleri çoğul eki gerektirmeyecek biçimde yazılır.
 fn singular(s: String) -> String {
     let rules: &[(&str, &str)] = match lang_code() {
-        "en" => &[("1 items", "1 item"), ("1 Files", "1 File"), ("1 Folders", "1 Folder")],
+        "en" => &[
+            ("1 items", "1 item"),
+            ("1 Files", "1 File"),
+            ("1 Folders", "1 Folder"),
+        ],
         "de" => &[("1 Elemente", "1 Element"), ("1 Dateien", "1 Datei")],
-        "es" => &[("1 elementos seleccionados", "1 elemento seleccionado"), ("1 elementos", "1 elemento"), ("1 archivos", "1 archivo"), ("1 carpetas", "1 carpeta")],
-        "fr" => &[("1 éléments sélectionnés", "1 élément sélectionné"), ("1 éléments", "1 élément"), ("1 fichiers", "1 fichier"), ("1 dossiers", "1 dossier")],
-        "pt" => &[("1 itens selecionados", "1 item selecionado"), ("1 itens", "1 item"), ("1 arquivos", "1 arquivo"), ("1 pastas", "1 pasta")],
+        "es" => &[
+            ("1 elementos seleccionados", "1 elemento seleccionado"),
+            ("1 elementos", "1 elemento"),
+            ("1 archivos", "1 archivo"),
+            ("1 carpetas", "1 carpeta"),
+        ],
+        "fr" => &[
+            ("1 éléments sélectionnés", "1 élément sélectionné"),
+            ("1 éléments", "1 élément"),
+            ("1 fichiers", "1 fichier"),
+            ("1 dossiers", "1 dossier"),
+        ],
+        "pt" => &[
+            ("1 itens selecionados", "1 item selecionado"),
+            ("1 itens", "1 item"),
+            ("1 arquivos", "1 arquivo"),
+            ("1 pastas", "1 pasta"),
+        ],
         _ => return s,
     };
-    rules.iter().fold(s, |s, (many, one)| replace_count(s, many, one))
+    rules
+        .iter()
+        .fold(s, |s, (many, one)| replace_count(s, many, one))
 }
 
 fn replace_count(s: String, many: &str, one: &str) -> String {
@@ -193,6 +236,8 @@ static TABLE: &[(&str, &str)] = &[
     ("Videolar", "Videos"),
     ("Giriş", "Home"),
     ("Bu bilgisayar", "This PC"),
+    ("Linux", "Linux"),
+    ("Galeri", "Gallery"),
     ("Sekmeyi kapat (Ctrl+W)", "Close tab (Ctrl+W)"),
     ("Sekmeyi çoğalt", "Duplicate tab"),
     ("Yeni pencerede aç", "Open in new window"),
@@ -232,7 +277,7 @@ static TABLE: &[(&str, &str)] = &[
     ("Grupla", "Group by"),
     ("(Yok)", "(None)"),
     ("Görünüm", "View"),
-    ("Ayrıntılar bölmesi (Alt+P)", "Details pane (Alt+P)"),
+    ("Önizleme bölmesi (Alt+P)", "Preview pane (Alt+P)"),
     ("Gizli öğeler (Ctrl+H)", "Hidden items (Ctrl+H)"),
     ("Dosya adı uzantıları", "File name extensions"),
     ("Varsayılan dosya gezgini olarak kullan", "Use as the default file manager"),
@@ -249,6 +294,7 @@ static TABLE: &[(&str, &str)] = &[
     ("Sistem", "System"),
     ("Açık", "Light"),
     ("Koyu", "Dark"),
+    ("Göster", "Show"),
     ("Dil", "Language"),
     ("Tümünü seç            Ctrl+A", "Select all            Ctrl+A"),
     ("Hiçbirini seçme        Esc", "Select none        Esc"),
@@ -370,7 +416,7 @@ static TABLE: &[(&str, &str)] = &[
     ("Aralık seç / tek tek seç", "Select range / select individually"),
     ("Harf yazmak", "Type a letter"),
     ("O harfle başlayan öğeye atla", "Jump to the item starting with that letter"),
-    ("Ayrıntılar / önizleme bölmesi", "Details / preview pane"),
+    ("Önizleme bölmesi", "Preview pane"),
     ("Çok büyük … ayrıntılar görünümü", "Extra large … details view"),
     ("Ctrl+fare tekerleği", "Ctrl+mouse wheel"),
     ("Simge boyutunu değiştir", "Change icon size"),
@@ -485,6 +531,25 @@ static TABLE: &[(&str, &str)] = &[
     ("Diğer uygulamalar", "Other apps"),
     ("Bu dosya türü için varsayılan uygulamayı seçin: {}", "Choose the default app for this file type: {}"),
     ("Yükleniyor…", "Loading…"),
+    ("Word Belgesi", "Word Document"),
+    ("Excel Çalışma Kitabı", "Excel Workbook"),
+    ("PowerPoint Sunusu", "PowerPoint Presentation"),
+    ("Zengin Metin Belgesi", "Rich Text Document"),
+    ("Sıkıştırılmış klasör", "Compressed Folder"),
+    ("PDF Belgesi", "PDF Document"),
+    ("Yeni Word Belgesi.docx", "New Word Document.docx"),
+    ("Yeni Excel Çalışma Kitabı.xlsx", "New Excel Workbook.xlsx"),
+    ("Yeni PowerPoint Sunusu.pptx", "New PowerPoint Presentation.pptx"),
+    ("Yeni Zengin Metin Belgesi.rtf", "New Rich Text Document.rtf"),
+    ("Yeni PDF Belgesi.pdf", "New PDF Document.pdf"),
+    ("Yeni Sıkıştırılmış klasör.zip", "New Compressed Folder.zip"),
+    ("Peek açılamadı — PowerToys kurulu mu?", "Couldn't open Peek — is PowerToys installed?"),
+    ("Boşluk", "Space"),
+    ("Peek ile önizleme (PowerToys)", "Preview with Peek (PowerToys)"),
+    ("Ayrıntılar bölmesi", "Details pane"),
+    ("Ayrıntılar bölmesi (Alt+Shift+P)", "Details pane (Alt+Shift+P)"),
+    ("Bu tür için önizleme yok.", "No preview available for this type."),
+    ("Önizlemek için bir öğe seçin.", "Select an item to preview."),
 ];
 
 #[cfg(test)]
@@ -508,7 +573,10 @@ mod tests {
         assert_eq!(singular("1 items selected".into()), "1 item selected");
         assert_eq!(singular("11 items".into()), "11 items");
         set_lang(lang_index("es").unwrap());
-        assert_eq!(singular("1 elementos seleccionados".into()), "1 elemento seleccionado");
+        assert_eq!(
+            singular("1 elementos seleccionados".into()),
+            "1 elemento seleccionado"
+        );
         set_lang(0);
     }
 

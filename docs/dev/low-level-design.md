@@ -633,3 +633,65 @@ automatically (`A:2636-2649`); `theme = index + 3` is persisted.
 - When the window is invisible on Windows, check the cloak path: HWND captured? `revealed`?
   `images.busy()`? (`A:1256-1286`).
 - `App::update` order is load-bearing: polling before `rebuild_view`, keys before panels, actions last.
+
+---
+
+## 12. Parity modules (2026 additions)
+
+Line numbers in sections 1-11 are from 0.7.0; these modules were added after that pass.
+
+### 12.1 `src/menu.rs` — modern context menu
+
+- `Node::new(label)` builds an item; builders `with_icon`, `with_colored_icon`, `with_mock`,
+  `with_cmd`, `shortcut`, `disabled`, `checked`, `sep_before`; `children` makes a submenu.
+- `Menu::new(pos)` holds the root; `menu::show(ctx, &mut menu)` draws it as an `egui::Area` and returns
+  `Outcome::Command(Cmd)`, `Close`, or `None`. `Cmd` = `App(usize)` (index into the action table built by
+  `item_menu`/`background_menu`), `Shell(verb)`, or `More`.
+- `menu::parts("label  Shift+F10")` splits the trailing shortcut for right alignment.
+- `menu::shell_node(&ShellMenuItem, ctx, path)` converts a shell verb into a `Node`; IDs are stable strings
+  so icon/submenu caches survive frames.
+- Quick-action strip (`quick_row`) is the icon row at the bottom (copy path, open, …), Explorer style.
+- `mock_view_icon` draws the tiny view diagrams (no glyph dependency): arms must all return `()`
+  (use blocks; `rect_filled` returns `ShapeIdx`).
+- `rect_stroke` in egui 0.31 needs `StrokeKind`; `CornerRadius::same(u8)`; float literals need `_f32`
+  when inference is ambiguous.
+
+### 12.2 `src/system.rs` — Windows integration
+
+- `text_scale()` reads the accessibility text-size setting; `App::new` applies `ctx.set_zoom_factor`.
+- `animations_enabled()` reads the "Show animations" setting; gates hover/scroll animation.
+- `set_hwnd(hwnd)` stores the window; `apply_backdrop(hwnd)` sets rounded corners +
+  `DWMWA_USE_IMMERSIVE_DARK_MODE` (Mica is deliberately absent — the glow surface is opaque).
+- `aumid()`/`set_aumid` support taskbar identity; `dpi` helpers feed `px_bucket`.
+- `set_hwnd` must be called **once** on the first frame, before `apply_backdrop`.
+
+### 12.3 `src/wsl.rs` — Linux locations
+
+- `distros()` → `Vec<Distro { name, root }>`; runs `wsl.exe --list --quiet` with `WSL_UTF8=1`, falls back
+  to UTF-16LE, trims `\r`/NULs, filters `docker-desktop*`, caches for 10 s.
+- Roots are `\\wsl.localhost\<name>`; hidden when the list is empty or on non-Windows.
+- Sidebar rows reuse `nav_row`; do not add a separate listing path.
+
+### 12.4 Gallery internals
+
+- `tab::GALLERY` = Explorer's Gallery CLSID (icon comes from the shell). The correct GUID ends in
+  `...417AA8`; `...417A2A` is invalid and silently yields a folder icon.
+- `fsutil::spawn_gallery` walks `dirs::picture_dir()` up to depth 6, skips hidden + reparse dirs, keeps
+  png/jpg/jpeg/gif/bmp/webp/tif/tiff/heic/heif/avif/jxl and mp4/mov/m4v/avi/mkv/wmv/webm/3gp/mpg/mpeg,
+  sorts modified-desc, caps 5000.
+- `Tab::rebuild_view` overrides sort to `Modified` desc and groups by `%B %Y` (English month names today).
+- `is_home()` stays true for Gallery (read-only guards); `is_gallery()` is the exception in
+  `navigate`, `load`, `go_up`, `preview_panel` and the central-panel dispatch.
+- `images::decode_photo` is the local fallback for still images the shell cannot thumbnail (offline
+  OneDrive placeholders, unusual PNGs); it is capped at 48 MB and only runs on non-icon requests.
+
+### New traps
+
+- `Tab::is_home()` is true for Home, This PC **and Gallery**; check `is_gallery()` before any
+  "virtual ⇒ no files" assumption.
+- `preview_panel` computes `home = !lists_files() && !is_gallery()`; dropping the second term brings back
+  "select an item" on Gallery.
+- Gallery ignores the Sort menu by design; changing sort keys there has no effect.
+- `Action::Navigate(GALLERY)` forces `view_level = 3` (Large icons); other tabs keep their view.
+- `cargo fmt --all` is **not** run on this fork: it reflows the whole tree and makes upstream merges noisy.
+

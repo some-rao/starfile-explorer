@@ -9,7 +9,8 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 /// Her sürümle yayınlanan bilgi dosyası. API'ye gitmediği için istek sınırına takılmaz.
-const LATEST: &str = "https://github.com/misutesu-desu/swift-explorer/releases/latest/download/latest.json";
+const LATEST: &str =
+    "https://github.com/misutesu-desu/swift-explorer/releases/latest/download/latest.json";
 
 /// Güncellemeyi kuran gizli süreç bu bayrakla yeni sürümü başlatır; yeni süreç
 /// eskisinin çıkmasını bekleyip arka planda bekler.
@@ -37,7 +38,12 @@ struct Binary {
 
 /// "v0.5.1" > "0.5.0"; sayı olmayan etiketler yeni sayılmaz
 fn newer(tag: &str, current: &str) -> bool {
-    let parse = |s: &str| -> Option<Vec<u64>> { s.trim_start_matches('v').split('.').map(|p| p.parse().ok()).collect() };
+    let parse = |s: &str| -> Option<Vec<u64>> {
+        s.trim_start_matches('v')
+            .split('.')
+            .map(|p| p.parse().ok())
+            .collect()
+    };
     match (parse(tag), parse(current)) {
         (Some(a), Some(b)) => a > b,
         _ => false,
@@ -46,22 +52,32 @@ fn newer(tag: &str, current: &str) -> bool {
 
 /// Geliştirme derlemesi (target/ altında) kendini güncellemesin
 fn is_dev_build(exe: &Path) -> bool {
-    cfg!(debug_assertions) || exe.ancestors().any(|a| a.file_name().is_some_and(|n| n == "target"))
+    cfg!(debug_assertions)
+        || exe
+            .ancestors()
+            .any(|a| a.file_name().is_some_and(|n| n == "target"))
 }
 
 /// Scoop kurduğu klasöre bu iki dosyayı koyar; sürümü kendisi takip eder
 fn scoop_install(exe: &Path) -> bool {
-    exe.parent().is_some_and(|d| d.join("install.json").exists() && d.join("manifest.json").exists())
+    exe.parent()
+        .is_some_and(|d| d.join("install.json").exists() && d.join("manifest.json").exists())
 }
 
 /// Flatpak ve Scoop kendi güncellemesini yapar
 pub fn enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("FLATPAK_ID").is_none() && !std::env::current_exe().is_ok_and(|e| scoop_install(&e)))
+    *ON.get_or_init(|| {
+        std::env::var_os("FLATPAK_ID").is_none()
+            && !std::env::current_exe().is_ok_and(|e| scoop_install(&e))
+    })
 }
 
 fn agent() -> ureq::Agent {
-    ureq::AgentBuilder::new().timeout_connect(Duration::from_secs(10)).timeout_read(Duration::from_secs(30)).build()
+    ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(10))
+        .timeout_read(Duration::from_secs(30))
+        .build()
 }
 
 /// Son sürümü denetler, Windows'ta kurar. Yeni sürüm yoksa `None`.
@@ -86,7 +102,9 @@ pub fn check() -> Result<Option<Found>, String> {
         return available;
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    let Some(bin) = &m.windows else { return available };
+    let Some(bin) = &m.windows else {
+        return available;
+    };
     if is_dev_build(&exe) {
         return available;
     }
@@ -125,16 +143,22 @@ const MAX_FAILED_STARTS: u32 = 2;
 /// Yeni sürüm her başlangıçta `.pending` sayacını artırır, `confirm_started` onu siler.
 /// Sayaç sınırdaysa yeni sürüm açılışta çöküyordur: eski exe geri konur ve başlatılır.
 pub fn startup_guard() {
-    let Ok(exe) = std::env::current_exe() else { return };
+    let Ok(exe) = std::env::current_exe() else {
+        return;
+    };
     if roll_back_if_failing(&exe, env!("CARGO_PKG_VERSION")) {
-        let _ = std::process::Command::new(&exe).args(std::env::args_os().skip(1)).spawn();
+        let _ = std::process::Command::new(&exe)
+            .args(std::env::args_os().skip(1))
+            .spawn();
         std::process::exit(0);
     }
 }
 
 fn roll_back_if_failing(exe: &Path, version: &str) -> bool {
     let pending = with_ext(exe, ".pending");
-    let Ok(text) = std::fs::read_to_string(&pending) else { return false };
+    let Ok(text) = std::fs::read_to_string(&pending) else {
+        return false;
+    };
     let starts: u32 = text.trim().parse().unwrap_or(0);
     let old = with_ext(exe, ".old");
     if !old.exists() {
@@ -172,7 +196,11 @@ pub fn confirm_started() {
 fn install(exe: &Path, url: &str, sha: &str, ua: &str) -> std::io::Result<()> {
     let new = with_ext(exe, ".new");
     let old = with_ext(exe, ".old");
-    let resp = agent().get(url).set("User-Agent", ua).call().map_err(std::io::Error::other)?;
+    let resp = agent()
+        .get(url)
+        .set("User-Agent", ua)
+        .call()
+        .map_err(std::io::Error::other)?;
     let mut file = std::fs::File::create(&new)?;
     let mut hasher = Sha256::new();
     let mut reader = resp.into_reader().take(256 << 20);
@@ -188,7 +216,11 @@ fn install(exe: &Path, url: &str, sha: &str, ua: &str) -> std::io::Result<()> {
         }
         file.sync_all()?;
         drop(file);
-        let got: String = hasher.finalize().iter().map(|b| format!("{b:02x}")).collect();
+        let got: String = hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
         if !got.eq_ignore_ascii_case(sha) {
             return Err(std::io::Error::other("sha256 eşleşmedi"));
         }
@@ -211,7 +243,9 @@ fn install(exe: &Path, url: &str, sha: &str, ua: &str) -> std::io::Result<()> {
 /// Kurulan sürümü pencere göstermeden başlatır
 pub fn launch_hidden() {
     if let Ok(exe) = std::env::current_exe() {
-        let _ = std::process::Command::new(exe).arg(AFTER_UPDATE_ARG).spawn();
+        let _ = std::process::Command::new(exe)
+            .arg(AFTER_UPDATE_ARG)
+            .spawn();
     }
 }
 
@@ -255,7 +289,10 @@ mod tests {
         assert!(roll_back_if_failing(&exe, "0.7.0"));
         assert_eq!(std::fs::read(&exe).unwrap(), b"old");
         assert_eq!(std::fs::read(with_ext(&exe, ".bad")).unwrap(), b"new");
-        assert_eq!(std::fs::read_to_string(with_ext(&exe, ".skip")).unwrap(), "0.7.0");
+        assert_eq!(
+            std::fs::read_to_string(with_ext(&exe, ".skip")).unwrap(),
+            "0.7.0"
+        );
         assert!(!with_ext(&exe, ".pending").exists());
         assert!(!roll_back_if_failing(&exe, "0.6.0"));
         std::fs::remove_dir_all(&dir).unwrap();

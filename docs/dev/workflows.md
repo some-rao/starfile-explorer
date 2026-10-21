@@ -89,8 +89,9 @@ Terminal shorthand: if the first word is `cmd|powershell|pwsh|wt|terminal` **and
 an existing directory under the current folder, the address bar emits `Action::RunTerminal`
 (`A:2315-2324`, `W:135-158`). Home and This PC use the user home as the working directory.
 
-`Tab::navigate` clears search/entries/selection/groups, resets `filter`, then either becomes virtual (no
-loader) or starts a load + free-space query + watcher (`T:191-258`).
+`Tab::navigate` clears search/entries/selection/groups, resets `filter`, then either becomes virtual
+(Home/This PC: no loader), becomes Gallery (gallery scan, no watcher/free-space), or starts a load +
+free-space query + watcher (`T:191-258`).
 
 ---
 
@@ -339,18 +340,22 @@ Undo journal (created when a job completes, `A:4392-4399`):
 
 ## 13. Context menus
 
+Since the parity pass the default menus are **drawn by `menu.rs`** (Win11 look), not `egui::menu`.
+
 | Surface | Menu |
 |---|---|
-| Item right-click | egui `item_menu` (`A:3149-3229`): Open, New tab, Paste into, Open with, Open file location (search), Cut/Copy/Copy path/Rename/Delete, size, pin, terminal, Explorer, Properties, "more options" |
-| Empty area right-click | egui `background_menu` (`A:3233-3299`): View, Sort, Refresh, Paste, Undo, New, Select all, terminal, pin, Properties |
-| Shift+F10 / Shift+right-click (Windows only) | native `IContextMenu` via `Action::ShellMenu{extended}` (`A:1883-1895`, `S:343-387`) |
+| Item right-click | `App::item_menu` builds `menu::Menu` from the **shell verb tree** (`ShellMenu::build`) + app commands; allowlist keeps Explorer-like verbs, the rest live behind "Show more options" |
+| Empty area right-click | `background_menu`: View, Sort, Refresh, Paste, Undo, New, Select all, terminal, pin, Properties |
+| "Show more options" / Shift+F10 / Shift+right-click (Windows) | `Action::ShellMenu{extended}` → native `IContextMenu` (`A:1883-1895`, `S:343-387`) |
 
 Native menu: PIDLs via `SHParseDisplayName`, `IShellItemArray` → `BindToHandler`, `QueryContextMenu`
 (`CMF_NORMAL|CMF_CANRENAME`, plus `CMF_EXTENDEDVERBS`), `TrackPopupMenuEx` at cursor. Only the `rename`
 verb is intercepted and mapped to inline rename. Menu messages are forwarded through the subclass, and
 `inject_release` clears egui's stuck mouse state afterwards.
 
-`NATIVE_MENU = cfg!(windows)` (`A:838`) hides Shift-path help rows on Linux.
+`menu::show` returns `Outcome::{Command,Close}`; `Cmd::App` maps to `Action`, `Cmd::Shell` invokes a verb,
+`Cmd::More` opens the native menu. Submenus are `Node.children`; icons come from `g::` glyphs with
+`fluent_font`. There is **no** Win11 XAML menu API for third parties, hence the custom renderer.
 
 ---
 
@@ -381,6 +386,8 @@ flowchart LR
 - Linux: icon theme lookup (`freedesktop-icons`), SVG via `resvg`, raster via `image::thumbnail`; no video/PDF
   thumbnails (`shell_unix.rs:17-128`).
 - Workers: 4, LIFO queue (newest visible rows first), 3 attempts then icon fallback (`I:72-117`).
+  For still images, if the shell returns no thumbnail, `decode_photo` decodes png/jpg/gif/webp/bmp/tiff
+  locally (≤48 MB) before falling back to the icon — this is what makes Gallery thumbnails reliable.
 - Cache: 160 MiB of deduped texture bytes (`ahash` of pixels shares identical textures), LRU eviction in
   chunks of 64 down to 75 % budget; anything drawn in the current/previous frame is never evicted (`I:159-317`).
 - `drop_pending()` is called on navigation; `busy()` gates the startup reveal.
@@ -465,3 +472,27 @@ autosave every 3 s, on park, on bookmark change and on exit.
 | Update loops or won't start | `.pending`/`.old`/`.skip` next to the exe (`U:111-170`) |
 | Menu leaves mouse stuck | missing `inject_release` after native menu/OLE (`A:1883-1895`, `4510-4518`) |
 | One-frame lag on actions | by design: `Action` queue applied at end of frame (`A:4498-4500`) |
+| Gallery empty or raw CLSID shown | wrong Gallery CLSID, `is_gallery()`/`is_home()` guard, `tab::GALLERY` mismatch (`T:16-27`, `F:spawn_gallery`) |
+| Gallery preview says "select an item" | `preview_panel` `home` must exclude `is_gallery()` (`A:5781-5786`) |
+| Gallery sort menu does nothing | intentional: Gallery forces modified-desc in `rebuild_view` |
+| WSL node missing | `wsl.exe --list --quiet` failed/empty, 10 s cache, or non-Windows build (`wsl.rs`) |
+
+---
+
+## 20. Explorer-parity additions (2026)
+
+These were added after the 0.7.0 docs pass; line anchors in sections 1-19 may have shifted.
+
+| Feature | Flow |
+|---|---|
+| **System scaling / font** | `system::text_scale()` → `ctx.set_zoom_factor`; Segoe UI Variable; PerMonitorV2 manifest; `system::animations_enabled()` gates motion |
+| **Window chrome** | first frame: `system::set_hwnd(hwnd)` + `system::apply_backdrop(hwnd)` → DWM rounded corners (`DWMWA_WINDOW_CORNER_PREFERENCE`) and immersive dark frame. Mica is *not* used: eframe's glow surface presents opaque |
+| **Modern context menu** | right-click → `ShellMenu::build` → allowlisted `menu::Node` tree → `menu::show`; "Show more options" → native classic menu (see §13) |
+| **Gallery** | sidebar row → `GALLERY` sentinel → `fx::spawn_gallery` (Pictures tree, images+videos, 5000 cap) → forced modified-desc + month/year groups → preview pane works; search roots = Pictures |
+| **WSL** | `wsl::distros()` (UTF-8/UTF-16LE, 10 s cache) → "Linux" sidebar node → `\\wsl.localhost\<distro>` through the normal directory pipeline |
+| **Installer** | `packaging/windows/swift-explorer.iss`: per-user Inno Setup, Start Menu shortcut, optional desktop shortcut, AUMID `SwiftExplorer.App`, uninstaller; `swift-explorer.exe --uninstall-cleanup` removes autostart/registry leftovers. Self-update and portable zip stay supported |
+| **New submenu** | `newfile.rs` templates (`Action::New(index)`); separate contribution, same menu renderer |
+
+Verification harness (feature `screenshot`): `SWIFT_EXPLORER_SCREENSHOT`, `_DELAY`, `_SIZE=1280x800`,
+`_INPUT="click:x,y;hover:x,y;rclick:x,y"`. Coordinates are **egui points**; the BMP may be DPI-scaled.
+
