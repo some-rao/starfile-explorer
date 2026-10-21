@@ -416,6 +416,7 @@ enum Action {
     ToggleGitColumn,
     ToggleHighlight,
     SetQuickLook(u8),
+    ToggleSplit,
     ToggleDefaultFm,
     ToggleBackground,
     ToggleAutostart,
@@ -522,6 +523,13 @@ pub struct App {
     quick_look: u8,
     /// Açık Hızlı Önizleme katmanı (Boşluk)
     quick: Option<QuickLook>,
+    /// Bölünmüş görünüm açık mı
+    split: bool,
+    /// İkinci bölmenin sekmeleri (odak dışındayken)
+    pane2: Vec<Tab>,
+    pane2_active: usize,
+    /// `tabs` hangi bölmeyi tutuyor: 0 sol, 1 sağ
+    focus: u8,
     background: bool,
     /// Sonraki açılışları bu süreç karşılıyor; kapanınca gizlenip bekleyebilir
     resident: bool,
@@ -1900,6 +1908,10 @@ impl App {
             highlight: cfg.highlight,
             quick_look: cfg.quick_look,
             quick: None,
+            split: false,
+            pane2: Vec::new(),
+            pane2_active: 0,
+            focus: 0,
             background: cfg.background,
             resident,
             autostart: win::autostart(),
@@ -2174,7 +2186,7 @@ impl App {
     }
 
     fn mark_views_dirty(&mut self) {
-        for t in &mut self.tabs {
+        for t in self.tabs.iter_mut().chain(self.pane2.iter_mut()) {
             t.view_dirty = true;
         }
     }
@@ -2593,9 +2605,11 @@ impl App {
             if shortcut(i, Modifiers::CTRL, Key::H) {
                 self.show_hidden = !self.show_hidden;
                 self.remember_view();
-                for t in &mut self.tabs {
-                    t.view_dirty = true;
-                }
+                self.mark_views_dirty();
+            }
+            // Ctrl+\: bölünmüş görünüm (ikinci bölme aynı klasörde açılır)
+            if shortcut(i, Modifiers::CTRL, Key::Backslash) {
+                actions.push(Action::ToggleSplit);
             }
             // Ctrl+Shift+1..6: Explorer'daki görünüm kısayolları
             for (k, lvl) in [
@@ -3235,6 +3249,23 @@ impl App {
             Action::SetQuickLook(v) => {
                 self.quick_look = v;
                 self.save_config();
+            }
+            Action::ToggleSplit => {
+                if self.split {
+                    self.split = false;
+                    self.pane2.clear();
+                    self.pane2_active = 0;
+                    if self.focus != 0 {
+                        // İkinci bölme öndeyse sekmelerini ana bölmeye taşı
+                        self.swap_panes();
+                        self.focus = 0;
+                    }
+                } else {
+                    let path = self.tabs[self.active].path.clone();
+                    self.pane2 = vec![Tab::new_lazy(path)];
+                    self.pane2_active = 0;
+                    self.split = true;
+                }
             }
             Action::ToggleDefaultFm => {
                 let target = !self.default_fm.unwrap_or_else(win::is_default_file_manager);
@@ -5366,6 +5397,13 @@ impl App {
                 .with_cmd(Cmd::App(id))
                 .checked(self.highlight),
         );
+        let id = acts.len() as u32;
+        acts.push(Action::ToggleSplit);
+        show.children.push(
+            Node::new(crate::i18n::t("Bölünmüş görünüm"))
+                .with_cmd(Cmd::App(id))
+                .checked(self.split),
+        );
         for (i, (v, label)) in [
             (0u8, "Yerleşik Hızlı Önizleme"),
             (1, "PowerToys Peek"),
@@ -5782,6 +5820,115 @@ fn handle_item_click(
 }
 
 impl App {
+    /// Bölmelerin sekme kümelerini yer değiştirir. `tabs`/`active` her zaman
+    /// odaklı bölmeyi tutar; kenar çubuğu, klavye, durum çubuğu ve `apply` bu
+    /// sayede hiçbir yerde "hangi bölme?" sorusu sormaz.
+    fn swap_panes(&mut self) {
+        std::mem::swap(&mut self.tabs, &mut self.pane2);
+        std::mem::swap(&mut self.active, &mut self.pane2_active);
+    }
+
+    /// Etkin bölmenin gövdesi (dosya listesi, Bu bilgisayar ya da Giriş sayfası).
+    fn pane_body(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        let t = &self.tabs[self.active];
+        if t.is_gallery() || t.lists_files() {
+            self.file_area(ui, actions);
+        } else if t.is_pc() {
+            self.pc_page(ui, actions);
+        } else {
+            self.home_page(ui, actions);
+        }
+    }
+
+    /// İki bölmeli görünüm: solda odaklı, sağda ikinci bölme.
+    ///
+    /// Odaksız bölme çizilirken sekme kümeleri yer değiştirir ve o bölmenin
+    /// eylemleri hâlâ o bölme öndeyken hemen uygulanır; böylece her eylem doğru
+    /// sekmeye gider. Kare sonunda odak kullanıcının bölmesine döner.
+    fn split_area(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        let focus = self.focus;
+        let mut new_focus = None;
+        let h = ui.available_height();
+        let total = ui.available_width();
+        let left_w = ((total - 1.0) * 0.5).floor().max(80.0);
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            for pane in [0u8, 1] {
+                if pane == 1 {
+                    let p = pal_of(ui);
+                    let (r, _) = ui.allocate_exact_size(egui::vec2(1.0, h), Sense::hover());
+                    ui.painter()
+                        .vline(r.center().x, r.y_range(), Stroke::new(1.0_f32, p.line));
+                }
+                let w = if pane == 0 {
+                    left_w
+                } else {
+                    ui.available_width().max(80.0)
+                };
+                ui.allocate_ui_with_layout(egui::vec2(w, h), Layout::top_down(Align::Min), |ui| {
+                    if pane != focus {
+                        self.swap_panes();
+                    }
+                    if pane != focus {
+                        // Başlık: ikinci bölmenin hangi klasörde olduğunu gösterir
+                        let title = {
+                            let t = &self.tabs[self.active];
+                            path_label(&t.path)
+                        };
+                        let p = pal_of(ui);
+                        ui.add_space(2.0);
+                        ui.horizontal(|ui| {
+                            ui.add_space(6.0);
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(title).size(text_size(12.0)).color(p.weak),
+                                )
+                                .truncate(),
+                            );
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if flat_icon(ui, g::CLOSE, egui::vec2(22.0, 22.0), 12.0, true)
+                                    .on_hover_text(crate::i18n::t("Bölünmüş görünümü kapat"))
+                                    .clicked()
+                                {
+                                    actions.push(Action::ToggleSplit);
+                                }
+                            });
+                        });
+                        ui.separator();
+                    }
+                    let ctx = ui.ctx().clone();
+                    self.tabs[self.active].ensure_loaded(&ctx);
+                    if pane == focus {
+                        self.pane_body(ui, actions);
+                    } else {
+                        let mut local = Vec::new();
+                        self.pane_body(ui, &mut local);
+                        let acted = !local.is_empty();
+                        for a in local {
+                            self.apply(a);
+                        }
+                        self.swap_panes();
+                        if acted {
+                            new_focus = Some(pane);
+                        }
+                    }
+                    if pane != focus
+                        && ui.rect_contains_pointer(ui.max_rect())
+                        && ui.input(|i| i.pointer.any_click())
+                    {
+                        new_focus = Some(pane);
+                    }
+                });
+            }
+        });
+        if let Some(p) = new_focus {
+            if p != focus {
+                self.swap_panes();
+                self.focus = p;
+            }
+        }
+    }
+
     fn file_area(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         let accent = self.accent;
         let (in_search, current) = {
@@ -7814,12 +7961,17 @@ impl eframe::App for App {
         }
 
         self.tabs[self.active].ensure_loaded(ctx);
+        if let Some(t) = self.pane2.get_mut(self.pane2_active) {
+            t.ensure_loaded(ctx);
+        }
         self.poll_subdirs();
-        for t in &mut self.tabs {
+        // Her iki bölme de arka plan işlerini sürdürür: odaksız bölmenin yüklemesi,
+        // izleyicisi ve araması da burada boşaltılır.
+        for t in self.tabs.iter_mut().chain(self.pane2.iter_mut()) {
             t.poll(ctx);
         }
         let (sort, asc, hidden) = (self.sort, self.asc, self.show_hidden);
-        for t in &mut self.tabs {
+        for t in self.tabs.iter_mut().chain(self.pane2.iter_mut()) {
             if t.view_dirty {
                 let grouped = self.grouped.contains(&t.path);
                 t.rebuild_view(sort, asc, hidden, grouped);
@@ -8065,13 +8217,10 @@ impl eframe::App for App {
                     }),
             )
             .show(ctx, |ui| {
-                let t = &self.tabs[self.active];
-                if t.is_gallery() || t.lists_files() {
-                    self.file_area(ui, &mut actions);
-                } else if t.is_pc() {
-                    self.pc_page(ui, &mut actions);
+                if self.split {
+                    self.split_area(ui, &mut actions);
                 } else {
-                    self.home_page(ui, &mut actions);
+                    self.pane_body(ui, &mut actions);
                 }
             });
 
@@ -8172,7 +8321,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
-        for t in &mut self.tabs {
+        for t in self.tabs.iter_mut().chain(self.pane2.iter_mut()) {
             t.cancel_search();
         }
         self.save_config();

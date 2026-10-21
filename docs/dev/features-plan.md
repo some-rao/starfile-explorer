@@ -449,3 +449,57 @@ navigation only affects the focused pane; undo works for jobs started from eithe
 4. Destination picker: native `IFileOpenDialog` on Windows (in-app modal on Linux)
    vs in-app modal everywhere.
 5. Quick Look default: built-in overlay first, PowerToys Peek as the alternative.
+
+---
+
+# Implementation status
+
+All six phases are implemented, one commit each. No background index, no
+admin/MFT index.
+
+| Phase | Commit | What landed |
+|---|---|---|
+| Base | `771c3ab` | sharp text (vendored `epaint`), system text size, resizable details columns, roomier nav pane |
+| 1 | `e8c201d` | `FolderView` + `Config.remember_views`/`folder_views`, per-folder sort/view/grouping/column widths, View-menu toggle + reset |
+| 2 | `66fbe61` | `shell::pick_folder` (IFileOpenDialog / zenity-kdialog), `Action::PickDest`, Copy to… / Move to… |
+| 3 | `bf54638` | `src/query.rs` (scope + `ext:`/`type:`/`size:`/`modified:`/`kind:`/`-word`), scope menu, removable chips row, scope in status bar |
+| 4 | `5e8a231` | `src/git.rs` (`HEAD` + `git status --porcelain=v2`), status-bar branch pill, Git details column (branch on repo root, state letter per file) |
+| 5 | `9aa07ac` | `src/highlight.rs` (single-pass lexer, 9 language families), `src/markdown.rs` (pulldown-cmark), preview rewrite, Space → built-in Quick Look overlay with `quick_look` setting |
+| 6 | (this commit) | split view: `pane2`/`focus`, `split_area`, Ctrl+\\, View-menu toggle |
+
+## Deviations from the design above
+
+- **Split view uses the swap design** the plan warned against, but with the
+  warning addressed: both panes' tabs are polled and rebuilt every frame
+  (`update` chains `self.tabs` and `self.pane2`), and the unfocused pane's
+  actions are applied **while that pane is swapped in**, so no action needs a
+  pane tag. Costs: one tab strip (the focused pane's), no persisted split
+  state, and `Ctrl+Tab` / close-last-tab act on the focused pane only.
+- **Quick Look** renders Markdown and highlighted text itself instead of only
+  delegating to PowerToys Peek; Peek remains selectable in the View menu.
+- Markdown tables/lists/headings are rendered; images, footnotes and inline
+  emphasis are shown as text. Links are not clickable yet.
+- Git column sits right after **Name** so the Size column keeps the right edge.
+
+## Verification checklist (manual)
+
+1. **Per-folder view** — set Details + sort by Date + widen a column in
+   `Downloads`, go to `Documents` (Icons view), return to `Downloads`; restart
+   and confirm both restore. View menu → *Reset this folder's view*.
+2. **Copy to… / Move to…** — right-click → *Copy to…*; pick a folder; confirm
+   the file appears, `Ctrl+Z` undoes it, and the conflict dialog appears when
+   the name exists.
+3. **Search** — type `ext:pdf size:>1mb`; chips appear under the search box;
+   click a chip's ✕ to remove it; press Enter and switch scope with the button
+   left of the search box (this folder / including subfolders / this PC).
+4. **Git** — open this repo; the status bar shows the branch, a ● when dirty,
+   ↑/↓ when ahead/behind; the Git column shows `M`/`?` next to changed files
+   and the branch name on the repository root folder. Toggle it in View.
+5. **Preview** — select `src/app.rs` (coloured), `README.md` (Markdown), then
+   press Space in the list for the Quick Look overlay; ←/→ move to the next
+   file while it is open; Esc closes. View → *Syntax highlighting* / the three
+   Quick Look entries.
+6. **Split view** — View → *Split view* or `Ctrl+\`; click a folder in the
+   right pane (it takes focus), `Alt+Left` goes back only in that pane; the tab
+   strip, status bar and side panel follow the focused pane.
+

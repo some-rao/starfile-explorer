@@ -361,4 +361,6 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Kod vurgulama", "構文ハイライト"),
     ("Yerleşik Hızlı Önizleme", "組み込みクイック ルック"),
     ("Kapalı", "オフ"),
+    ("Bölünmüş görünüm", "分割ビュー"),
+    ("Bölünmüş görünümü kapat", "分割ビューを閉じる"),
 ];

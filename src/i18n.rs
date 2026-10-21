@@ -563,6 +563,8 @@ static TABLE: &[(&str, &str)] = &[
     ("Kod vurgulama", "Syntax highlighting"),
     ("Yerleşik Hızlı Önizleme", "Built-in Quick Look"),
     ("Kapalı", "Off"),
+    ("Bölünmüş görünüm", "Split view"),
+    ("Bölünmüş görünümü kapat", "Close split view"),
 ];
 
 #[cfg(test)]
