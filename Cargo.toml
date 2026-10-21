@@ -24,6 +24,7 @@ ureq = "2"
 sha2 = "0.10"
 # Galeri küçük resimleri: kabuk sağlayıcısı üretemezse fotoğrafı kendimiz küçültürüz
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
+pulldown-cmark = { version = "0.12", default-features = false }
 
 [features]
 # README görüntülerini üretmek için, bkz. src/screenshot.rs

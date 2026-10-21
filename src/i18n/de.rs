@@ -358,4 +358,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Filtreyi kaldır", "Filter entfernen"),
     ("Git", "Git"),
     ("Git sütununu göster", "Git-Spalte anzeigen"),
+    ("Kod vurgulama", "Syntaxhervorhebung"),
+    ("Yerleşik Hızlı Önizleme", "Integrierte Schnellansicht"),
+    ("Kapalı", "Aus"),
 ];

@@ -560,6 +560,9 @@ static TABLE: &[(&str, &str)] = &[
     ("Filtreyi kaldır", "Remove filter"),
     ("Git", "Git"),
     ("Git sütununu göster", "Show Git column"),
+    ("Kod vurgulama", "Syntax highlighting"),
+    ("Yerleşik Hızlı Önizleme", "Built-in Quick Look"),
+    ("Kapalı", "Off"),
 ];
 
 #[cfg(test)]

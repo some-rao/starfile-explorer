@@ -26,21 +26,8 @@ pub enum SearchScope {
     ThisPc,
 }
 
-/// Çipin türü; yalnızca görünüm ve `without_chip` için kullanılır.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum ChipKind {
-    Ext,
-    Type,
-    Size,
-    Modified,
-    Kind,
-    Neg,
-}
-
 #[derive(Clone)]
 pub struct Chip {
-    pub kind: ChipKind,
-    pub value: String,
     /// Sorgu metnindeki özgün yazım (`ext:pdf`, `-taslak`, ...)
     pub token: String,
 }
@@ -99,8 +86,6 @@ impl Query {
                 let p = Pattern::new(rest);
                 if !p.is_empty() {
                     chips.push(Chip {
-                        kind: ChipKind::Neg,
-                        value: rest.to_string(),
                         token: token.to_string(),
                     });
                     preds.push(Pred::Not(p));
@@ -113,8 +98,6 @@ impl Query {
                 if !value.is_empty() {
                     if let Some(pred) = parse_pred(&key, value) {
                         chips.push(Chip {
-                            kind: chip_kind(&key),
-                            value: value.to_string(),
                             token: token.to_string(),
                         });
                         preds.push(pred);
@@ -160,16 +143,6 @@ impl Query {
             }
         }
         parts.join(" ")
-    }
-}
-
-fn chip_kind(key: &str) -> ChipKind {
-    match key {
-        "ext" | "uzanti" | "uzantı" => ChipKind::Ext,
-        "type" | "tur" | "tür" => ChipKind::Type,
-        "size" | "boyut" => ChipKind::Size,
-        "modified" | "tarih" => ChipKind::Modified,
-        _ => ChipKind::Kind,
     }
 }
 

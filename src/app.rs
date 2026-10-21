@@ -82,6 +82,10 @@ struct Config {
     folder_views: HashMap<String, FolderView>,
     /// Ayrıntılar görünümünde Git sütunu gösterilsin
     git_column: bool,
+    /// Kod önizlemesinde sözdizimi renklendirmesi
+    highlight: bool,
+    /// Boşluk tuşu: 0 = yerleşik Hızlı Önizleme, 1 = PowerToys Peek, 2 = kapalı
+    quick_look: u8,
 }
 
 impl Default for Config {
@@ -108,6 +112,8 @@ impl Default for Config {
             remember_views: true,
             folder_views: HashMap::new(),
             git_column: true,
+            highlight: true,
+            quick_look: 0,
         }
     }
 }
@@ -408,6 +414,8 @@ enum Action {
     ToggleRememberViews,
     ForgetFolderView,
     ToggleGitColumn,
+    ToggleHighlight,
+    SetQuickLook(u8),
     ToggleDefaultFm,
     ToggleBackground,
     ToggleAutostart,
@@ -473,6 +481,14 @@ struct Preview {
     data: Arc<Mutex<Option<(PathBuf, PreviewData)>>>,
 }
 
+/// Yerleşik Hızlı Önizleme katmanı: veri arka planda okunur, katman kapanınca
+/// iş parçacığı sonucu yalnızca bellekte kalır (yeni açılışta yeniden okunur).
+struct QuickLook {
+    path: PathBuf,
+    data: Arc<Mutex<Option<(PathBuf, PreviewData)>>>,
+    started: bool,
+}
+
 pub struct App {
     tabs: Vec<Tab>,
     active: usize,
@@ -500,6 +516,12 @@ pub struct App {
     git_tx: std::sync::mpsc::Sender<(PathBuf, Option<Arc<crate::git::GitInfo>>)>,
     git_rx: std::sync::mpsc::Receiver<(PathBuf, Option<Arc<crate::git::GitInfo>>)>,
     git_pending: std::collections::HashSet<PathBuf>,
+    /// Kod önizlemesinde sözdizimi renklendirmesi
+    highlight: bool,
+    /// Boşluk tuşu: 0 = yerleşik Hızlı Önizleme, 1 = PowerToys Peek, 2 = kapalı
+    quick_look: u8,
+    /// Açık Hızlı Önizleme katmanı (Boşluk)
+    quick: Option<QuickLook>,
     background: bool,
     /// Sonraki açılışları bu süreç karşılıyor; kapanınca gizlenip bekleyebilir
     resident: bool,
@@ -659,6 +681,26 @@ fn setup_fonts(ctx: &egui::Context) {
     fonts
         .families
         .insert(egui::FontFamily::Name(FLUENT.into()), fluent);
+    // Kod önizlemesi: Windows 11'in Cascadia Mono'su, yoksa Consolas; hiçbiri yoksa
+    // egui'nin gömülü Hack'i kalır. Aile listesinin başına eklenir.
+    #[cfg(windows)]
+    {
+        let mut mono: Vec<String> = Vec::new();
+        for (name, file) in [
+            ("cascadia_mono", "CascadiaMono.ttf"),
+            ("consolas", "consola.ttf"),
+        ] {
+            if let Ok(bytes) = std::fs::read(format!("C:\\Windows\\Fonts\\{file}")) {
+                fonts
+                    .font_data
+                    .insert(name.into(), Arc::new(egui::FontData::from_owned(bytes)));
+                mono.push(name.into());
+                break;
+            }
+        }
+        mono.extend(fonts.families[&egui::FontFamily::Monospace].iter().cloned());
+        fonts.families.insert(egui::FontFamily::Monospace, mono);
+    }
     ctx.set_fonts(fonts);
 }
 
@@ -1144,6 +1186,22 @@ pub(crate) fn text_factor() -> f32 {
 /// Ölçeklenmiş, piksele oturan yazı tipi
 pub(crate) fn ui_font(size: f32) -> egui::FontId {
     egui::FontId::proportional(text_size(size))
+}
+
+/// Kod renklendirmesi için palet: düz metin, yorum, anahtar sözcük ve tema koyuluğu.
+fn code_colors(ui: &egui::Ui, accent: Color32) -> crate::highlight::Colors {
+    let p = pal_of(ui);
+    crate::highlight::Colors {
+        text: p.text,
+        weak: p.weak,
+        accent,
+        dark: ui.visuals().dark_mode,
+    }
+}
+
+/// Markdown olarak çizilecek uzantılar.
+fn is_markdown_ext(ext: &str) -> bool {
+    matches!(ext, "md" | "markdown" | "mdown" | "mkd" | "mdx")
 }
 
 /// Kaldırma öncesi: otomatik başlatmayı ve varsayılan dosya gezgini kayıtlarını geri al.
@@ -1839,6 +1897,9 @@ impl App {
             git_tx,
             git_rx,
             git_pending: Default::default(),
+            highlight: cfg.highlight,
+            quick_look: cfg.quick_look,
+            quick: None,
             background: cfg.background,
             resident,
             autostart: win::autostart(),
@@ -1948,6 +2009,8 @@ impl App {
             remember_views: self.remember_views,
             folder_views: self.folder_views.clone(),
             git_column: self.git_column,
+            highlight: self.highlight,
+            quick_look: self.quick_look,
             background: self.background,
             auto_update: self.auto_update.load(Relaxed),
             last_update_check: self.last_update_check.load(Relaxed),
@@ -2702,6 +2765,7 @@ impl App {
         if !ctrl
             && !shift
             && matches!(self.dialog, Dialog::None)
+            && self.quick.is_none()
             && self.tabs[self.active].lists_files()
         {
             ctx.input(|i| {
@@ -3164,6 +3228,14 @@ impl App {
                 self.mark_views_dirty();
                 self.save_config();
             }
+            Action::ToggleHighlight => {
+                self.highlight = !self.highlight;
+                self.save_config();
+            }
+            Action::SetQuickLook(v) => {
+                self.quick_look = v;
+                self.save_config();
+            }
             Action::ToggleDefaultFm => {
                 let target = !self.default_fm.unwrap_or_else(win::is_default_file_manager);
                 let before =
@@ -3206,17 +3278,21 @@ impl App {
                 }
             }
             Action::Undo => self.do_undo(),
-            Action::Peek => {
-                let Some(entry) = self.tab().selected_entries().into_iter().next() else {
-                    return;
-                };
-                if !win::peek_file(&entry.path) {
-                    self.toast(
-                        crate::i18n::t("Peek açılamadı — PowerToys kurulu mu?"),
-                        true,
-                    );
+            Action::Peek => match self.quick_look {
+                2 => {}
+                1 => {
+                    let Some(entry) = self.tab().selected_entries().into_iter().next() else {
+                        return;
+                    };
+                    if !win::peek_file(&entry.path) {
+                        self.toast(
+                            crate::i18n::t("Peek açılamadı - PowerToys kurulu mu?"),
+                            true,
+                        );
+                    }
                 }
-            }
+                _ => self.open_quick_look(),
+            },
         }
     }
 }
@@ -5284,6 +5360,31 @@ impl App {
                 .checked(self.git_column),
         );
         let id = acts.len() as u32;
+        acts.push(Action::ToggleHighlight);
+        show.children.push(
+            Node::new(crate::i18n::t("Kod vurgulama"))
+                .with_cmd(Cmd::App(id))
+                .checked(self.highlight),
+        );
+        for (i, (v, label)) in [
+            (0u8, "Yerleşik Hızlı Önizleme"),
+            (1, "PowerToys Peek"),
+            (2, "Kapalı"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let id = acts.len() as u32;
+            acts.push(Action::SetQuickLook(v));
+            let mut node = Node::new(crate::i18n::t(label))
+                .with_cmd(Cmd::App(id))
+                .checked(self.quick_look == v);
+            if i == 0 {
+                node = node.sep_before();
+            }
+            show.children.push(node);
+        }
+        let id = acts.len() as u32;
         acts.push(Action::ToggleDefaultFm);
         let mut row = Node::new(crate::i18n::t("Varsayılan dosya gezgini olarak kullan"))
             .with_cmd(Cmd::App(id));
@@ -6679,11 +6780,18 @@ impl App {
                         );
                     }
                 }
-                if let Some((p, PreviewData::Text(s))) = data.as_ref() {
-                    if p == &e.path {
+                if let Some((pp, PreviewData::Text(s))) = data.as_ref() {
+                    if pp == &e.path {
                         ui.add_space(10.0);
-                        ui.label(RichText::new(crate::i18n::t("Önizleme")).strong());
+                        ui.label(RichText::new(crate::i18n::t("Önizleme")).weak());
                         ui.separator();
+                        let colors = code_colors(ui, self.accent);
+                        let is_md = is_markdown_ext(&e.ext);
+                        let lang = if self.highlight {
+                            crate::highlight::Lang::from_path(&e.path)
+                        } else {
+                            None
+                        };
                         egui::Frame::new()
                             .fill(ui.visuals().extreme_bg_color)
                             .corner_radius(6.0)
@@ -6693,15 +6801,176 @@ impl App {
                                     .max_height(420.0)
                                     .auto_shrink([false, true])
                                     .show(ui, |ui| {
-                                        ui.add(
-                                            egui::Label::new(RichText::new(s.as_str()).monospace())
-                                                .extend(),
-                                        );
+                                        if is_md {
+                                            ui.set_width(ui.available_width());
+                                            crate::markdown::render(
+                                                ui,
+                                                s,
+                                                &crate::markdown::Md {
+                                                    c: colors,
+                                                    size: text_size(14.0),
+                                                },
+                                            );
+                                        } else {
+                                            let job = crate::highlight::job(
+                                                lang,
+                                                s,
+                                                text_size(12.5),
+                                                colors,
+                                            );
+                                            ui.add(egui::Label::new(job).extend());
+                                        }
                                     });
                             });
                     }
                 }
             });
+    }
+
+    /// Boşluk: seçili dosyayı yerleşik katmanda önizle.
+    fn open_quick_look(&mut self) {
+        let Some(entry) = self.tab().selected_entries().into_iter().next().cloned() else {
+            return;
+        };
+        if entry.is_dir {
+            return;
+        }
+        self.quick = Some(QuickLook {
+            path: entry.path,
+            data: Arc::new(Mutex::new(None)),
+            started: false,
+        });
+    }
+
+    /// Yerleşik Hızlı Önizleme katmanı: görsel ya da renklendirilmiş metin.
+    fn quick_look_ui(&mut self, ctx: &egui::Context) {
+        let Some(ql) = self.quick.as_ref() else {
+            return;
+        };
+        let path = ql.path.clone();
+        let data = ql.data.clone();
+        let started = ql.started;
+        // Liste seçimi değiştiyse katman da onu izler (ok tuşlarıyla gezinme).
+        let sel = {
+            let t = &self.tabs[self.active];
+            t.selected_entries().into_iter().next().cloned()
+        };
+        if let Some(e) = sel {
+            if e.path != path {
+                self.quick = if e.is_dir {
+                    None
+                } else {
+                    Some(QuickLook {
+                        path: e.path,
+                        data: Arc::new(Mutex::new(None)),
+                        started: false,
+                    })
+                };
+                return;
+            }
+        }
+        if !started {
+            if let Some(q) = self.quick.as_mut() {
+                q.started = true;
+            }
+            let store = data.clone();
+            let p = path.clone();
+            let ctx2 = ctx.clone();
+            std::thread::spawn(move || {
+                let d = fsutil::read_preview(&p);
+                *store.lock().unwrap() = Some((p, d));
+                ctx2.request_repaint();
+            });
+        }
+        let mut open = true;
+        let mut close = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+        let screen = ctx.screen_rect();
+        let size = egui::vec2(
+            (screen.width() * 0.68).clamp(360.0, 1100.0),
+            (screen.height() * 0.74).clamp(260.0, 900.0),
+        );
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        egui::Window::new(path_label(&path))
+            .id(egui::Id::new("quick_look"))
+            .open(&mut open)
+            .resizable(true)
+            .collapsible(false)
+            .default_size(size)
+            .default_pos(screen.center() - size * 0.5)
+            .show(ctx, |ui| {
+                ui.set_min_height(size.y - 60.0);
+                if fsutil::has_thumbnail(&ext) {
+                    let px = icon_px(ui.ctx(), 900.0);
+                    let key = format!("t{px}:{}", path.display());
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width(), ui.available_height().max(120.0)),
+                        Sense::hover(),
+                    );
+                    if let Img::Ready(tex) = self.images.get(&key, &path, px, false) {
+                        let r = fit_rect(tex.size_vec2(), rect);
+                        ui.painter().image(
+                            tex.id(),
+                            r,
+                            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                            Color32::WHITE,
+                        );
+                    }
+                    return;
+                }
+                let colors = code_colors(ui, self.accent);
+                let lang = if self.highlight {
+                    crate::highlight::Lang::from_path(&path)
+                } else {
+                    None
+                };
+                let d = data.lock().unwrap();
+                match d.as_ref() {
+                    Some((p, PreviewData::Text(s))) if p == &path => {
+                        egui::ScrollArea::both()
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                if is_markdown_ext(&ext) {
+                                    ui.set_width(ui.available_width());
+                                    crate::markdown::render(
+                                        ui,
+                                        s,
+                                        &crate::markdown::Md {
+                                            c: colors,
+                                            size: text_size(14.0),
+                                        },
+                                    );
+                                } else {
+                                    let job =
+                                        crate::highlight::job(lang, s, text_size(13.0), colors);
+                                    ui.add(egui::Label::new(job).extend());
+                                }
+                            });
+                    }
+                    Some((p, PreviewData::Error(err))) if p == &path => {
+                        ui.label(
+                            RichText::new(crate::i18n::tf("Önizleme yapılamadı: {}", &[err]))
+                                .weak(),
+                        );
+                    }
+                    Some((p, PreviewData::Binary)) if p == &path => {
+                        ui.label(RichText::new(crate::i18n::t("Bu tür için önizleme yok.")).weak());
+                    }
+                    _ => {
+                        ui.spinner();
+                        ui.ctx().request_repaint();
+                    }
+                }
+            });
+        if !open {
+            close = true;
+        }
+        if close {
+            self.quick = None;
+        }
     }
 
     /// Ayrıntılar bölmesi: her tür dosya ve klasörün özellikleri
@@ -7809,6 +8078,7 @@ impl eframe::App for App {
         let perf_dialogs = perf_t0.elapsed().as_secs_f32() * 1000.0;
         self.dialogs(ctx);
         self.overlays(ctx);
+        self.quick_look_ui(ctx);
         self.drag_overlay(ctx);
         self.draw_context_menu(ctx, &mut actions);
 

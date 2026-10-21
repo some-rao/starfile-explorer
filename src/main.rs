@@ -5,8 +5,10 @@ mod app;
 mod desktop_apps;
 mod fsutil;
 mod git;
+mod highlight;
 mod i18n;
 mod images;
+mod markdown;
 mod menu;
 mod newfile;
 #[cfg(not(windows))]
