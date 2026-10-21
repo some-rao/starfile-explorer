@@ -348,4 +348,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Ayrıntılar bölmesi (Alt+Shift+P)", "Область сведений (Alt+Shift+P)"),
     ("Bu tür için önizleme yok.", "Для этого типа нет предпросмотра."),
     ("Önizlemek için bir öğe seçin.", "Выберите элемент для предпросмотра."),
+    ("Her klasörün görünümünü hatırla", "Запоминать вид каждой папки"),
+    ("Klasör görünümünü sıfırla", "Сбросить вид этой папки"),
+    ("Bu klasörün görünümü sıfırlandı", "Вид этой папки сброшен"),
 ];

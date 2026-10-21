@@ -550,6 +550,9 @@ static TABLE: &[(&str, &str)] = &[
     ("Ayrıntılar bölmesi (Alt+Shift+P)", "Details pane (Alt+Shift+P)"),
     ("Bu tür için önizleme yok.", "No preview available for this type."),
     ("Önizlemek için bir öğe seçin.", "Select an item to preview."),
+    ("Her klasörün görünümünü hatırla", "Remember each folder's view"),
+    ("Klasör görünümünü sıfırla", "Reset this folder's view"),
+    ("Bu klasörün görünümü sıfırlandı", "This folder's view was reset"),
 ];
 
 #[cfg(test)]

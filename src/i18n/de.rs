@@ -348,4 +348,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Peek açılamadı — PowerToys kurulu mu?", "Peek konnte nicht geöffnet werden — ist PowerToys installiert?"),
     ("Boşluk", "Leertaste"),
     ("Peek ile önizleme (PowerToys)", "Vorschau mit Peek (PowerToys)"),
+    ("Her klasörün görünümünü hatırla", "Ansicht jedes Ordners merken"),
+    ("Klasör görünümünü sıfırla", "Ansicht dieses Ordners zurücksetzen"),
+    ("Bu klasörün görünümü sıfırlandı", "Die Ansicht dieses Ordners wurde zurückgesetzt"),
 ];

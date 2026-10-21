@@ -348,4 +348,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Ayrıntılar bölmesi (Alt+Shift+P)", "详细信息窗格 (Alt+Shift+P)"),
     ("Bu tür için önizleme yok.", "此类型没有可用的预览。"),
     ("Önizlemek için bir öğe seçin.", "请选择一个项目进行预览。"),
+    ("Her klasörün görünümünü hatırla", "记住每个文件夹的视图"),
+    ("Klasör görünümünü sıfırla", "重置此文件夹的视图"),
+    ("Bu klasörün görünümü sıfırlandı", "此文件夹的视图已重置"),
 ];

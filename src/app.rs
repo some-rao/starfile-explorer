@@ -36,6 +36,18 @@ const FLUENT: &str = "fluent";
 
 // ---------------------------------------------------------------- ayarlar
 
+/// Bir klasörün kendi görünümü. `None` = "bu klasör bu ayarı değiştirmedi",
+/// böylece yalnızca sıralamayı değiştiren bir klasör görünüm düzeyini dondurmaz.
+#[derive(Serialize, Deserialize, Clone, Default)]
+struct FolderView {
+    view_level: Option<usize>,
+    sort: Option<SortKey>,
+    asc: Option<bool>,
+    grouped: Option<bool>,
+    show_hidden: Option<bool>,
+    show_ext: Option<bool>,
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(default)]
 struct Config {
@@ -63,6 +75,10 @@ struct Config {
     last_update_check: u64,
     /// Varsayılan dosya yöneticisi yapılmadan önceki uygulama (Linux'ta geri yüklemek için)
     previous_folder_app: Option<String>,
+    /// Her klasör kendi görünümünü (düzen, sıralama, gruplama, sütun genişlikleri) hatırlasın
+    remember_views: bool,
+    /// Küçük harfli yol -> klasör görünümü
+    folder_views: HashMap<String, FolderView>,
 }
 
 impl Default for Config {
@@ -86,6 +102,8 @@ impl Default for Config {
             auto_update: true,
             last_update_check: 0,
             previous_folder_app: None,
+            remember_views: true,
+            folder_views: HashMap::new(),
         }
     }
 }
@@ -212,9 +230,34 @@ pub fn prefetch_startup(start: Option<PathBuf>) {
     if let Some(d) = &dir {
         fsutil::prefetch(d.clone());
     }
-    let level = cfg.view_level.min(VIEW_LEVELS.len() - 1);
-    let grouped = dir.as_ref().is_some_and(|d| cfg.grouped.contains(d));
-    let (sort, asc, show_hidden) = (cfg.sort, cfg.asc, cfg.show_hidden);
+    let mut level = cfg.view_level.min(VIEW_LEVELS.len() - 1);
+    let mut grouped = dir.as_ref().is_some_and(|d| cfg.grouped.contains(d));
+    let (mut sort, mut asc, mut show_hidden) = (cfg.sort, cfg.asc, cfg.show_hidden);
+    // Klasörün kendi görünümü varsa ilk kare de onu kullanır (App::sync_folder_view
+    // ile aynı kurallar); yoksa ilk karede yanlış düzen parlaması olurdu.
+    if cfg.remember_views {
+        if let Some(fv) = dir
+            .as_ref()
+            .and_then(|d| App::folder_key(d))
+            .and_then(|k| cfg.folder_views.get(&k))
+        {
+            if let Some(v) = fv.view_level {
+                level = v.min(VIEW_LEVELS.len() - 1);
+            }
+            if let Some(v) = fv.sort {
+                sort = v;
+            }
+            if let Some(v) = fv.asc {
+                asc = v;
+            }
+            if let Some(v) = fv.show_hidden {
+                show_hidden = v;
+            }
+            if let Some(v) = fv.grouped {
+                grouped = v;
+            }
+        }
+    }
     std::thread::spawn(move || {
         let scale = shell::system_scale();
         let px = |logical: f32| px_bucket(logical * scale);
@@ -349,6 +392,8 @@ enum Action {
     Peek,
     ToggleHidden,
     ToggleExt,
+    ToggleRememberViews,
+    ForgetFolderView,
     ToggleDefaultFm,
     ToggleBackground,
     ToggleAutostart,
@@ -429,6 +474,11 @@ pub struct App {
     recent: Vec<PathBuf>,
     tips_dismissed: bool,
     grouped: Vec<PathBuf>,
+    /// Her klasörün kendi görünümü (bkz. `FolderView`)
+    remember_views: bool,
+    folder_views: HashMap<String, FolderView>,
+    /// Görünümü en son uygulanan klasörün anahtarı; sekme/klasör değişimini yakalar
+    view_key: Option<String>,
     background: bool,
     /// Sonraki açılışları bu süreç karşılıyor; kapanınca gizlenip bekleyebilir
     resident: bool,
@@ -870,7 +920,14 @@ fn wheel_log(ctx: &egui::Context) {
 /// (SWIFT_EXPLORER_WHEELLOG=1). Kaydırma takıntısının çerçeve maliyetinden
 /// mi (dosya/ikon yükleme, disk yazımı) yoksa giriş kararkolundan mı
 /// geldiğini ayırt etmek için; tema sonunda kaldırılacak.
-fn perf_log(ctx: &egui::Context, images: &ImageCache, body_ms: f32) {
+fn perf_log(
+    ctx: &egui::Context,
+    images: &ImageCache,
+    pre_ms: f32,
+    panels_ms: f32,
+    center_ms: f32,
+    post_ms: f32,
+) {
     use std::sync::Mutex;
     use std::time::Instant;
     static PREV: Mutex<Option<Instant>> = Mutex::new(None);
@@ -908,11 +965,11 @@ fn perf_log(ctx: &egui::Context, images: &ImageCache, body_ms: f32) {
         let _ = match gap_ms {
             Some(g) => writeln!(
                 f,
-                "PERF gap={g:>6.1} body={body_ms:>5.1} ms wheel={wheel} iconq={icon_q}"
+                "PERF gap={g:>6.1} pre={pre_ms:>5.1} pan={panels_ms:>5.1} ctr={center_ms:>5.1} post={post_ms:>5.1} wheel={wheel} iconq={icon_q}"
             ),
             None => writeln!(
                 f,
-                "PERF gap=  --- body={body_ms:>5.1} ms wheel={wheel} iconq={icon_q}"
+                "PERF gap=  --- pre={pre_ms:>5.1} pan={panels_ms:>5.1} ctr={center_ms:>5.1} post={post_ms:>5.1} wheel={wheel} iconq={icon_q}"
             ),
         };
     }
@@ -1749,6 +1806,9 @@ impl App {
             recent: cfg.recent,
             tips_dismissed: cfg.tips_dismissed,
             grouped: cfg.grouped,
+            remember_views: cfg.remember_views,
+            folder_views: cfg.folder_views,
+            view_key: None,
             background: cfg.background,
             resident,
             autostart: win::autostart(),
@@ -1855,6 +1915,8 @@ impl App {
             recent: self.recent.clone(),
             tips_dismissed: self.tips_dismissed,
             grouped: self.grouped.clone(),
+            remember_views: self.remember_views,
+            folder_views: self.folder_views.clone(),
             background: self.background,
             auto_update: self.auto_update.load(Relaxed),
             last_update_check: self.last_update_check.load(Relaxed),
@@ -2021,6 +2083,97 @@ impl App {
         for t in &mut self.tabs {
             t.view_dirty = true;
         }
+    }
+
+    /// Klasör anahtarı: Windows'ta büyük/küçük harf duyarsız, sanal konumlar hatırlanmaz.
+    fn folder_key(p: &Path) -> Option<String> {
+        if crate::tab::is_virtual(p) {
+            return None;
+        }
+        Some(p.to_string_lossy().to_lowercase())
+    }
+
+    /// Geçerli klasörün görünümünü kaydet (yalnızca kullanıcı bir ayarı değiştirdiğinde
+    /// çağrılır; böylece yalnızca gezilen her klasör için kayıt oluşmaz).
+    fn remember_view(&mut self) {
+        if !self.remember_views {
+            return;
+        }
+        let path = self.tabs[self.active].path.clone();
+        let Some(key) = Self::folder_key(&path) else {
+            return;
+        };
+        let fv = FolderView {
+            view_level: Some(self.view_level),
+            sort: Some(self.sort),
+            asc: Some(self.asc),
+            grouped: Some(self.grouped.iter().any(|g| g == &path)),
+            show_hidden: Some(self.show_hidden),
+            show_ext: Some(self.show_ext),
+        };
+        self.folder_views.insert(key, fv);
+    }
+
+    /// Etkin sekmenin klasörü değiştiyse o klasörün kayıtlı görünümünü uygula.
+    fn sync_folder_view(&mut self) {
+        let key = Self::folder_key(&self.tabs[self.active].path);
+        if key == self.view_key {
+            return;
+        }
+        self.view_key = key;
+        if !self.remember_views {
+            return;
+        }
+        let path = self.tabs[self.active].path.clone();
+        let Some(key) = Self::folder_key(&path) else {
+            return;
+        };
+        let Some(fv) = self.folder_views.get(&key).cloned() else {
+            return;
+        };
+        if let Some(v) = fv.view_level {
+            self.view_level = v.min(VIEW_LEVELS.len() - 1);
+        }
+        if let Some(v) = fv.sort {
+            self.sort = v;
+        }
+        if let Some(v) = fv.asc {
+            self.asc = v;
+        }
+        if let Some(v) = fv.show_hidden {
+            if v != self.show_hidden {
+                self.subdirs.clear();
+            }
+            self.show_hidden = v;
+        }
+        if let Some(v) = fv.show_ext {
+            self.show_ext = v;
+        }
+        if let Some(v) = fv.grouped {
+            let has = self.grouped.iter().any(|g| g == &path);
+            if v && !has {
+                self.grouped.push(path);
+            } else if !v && has {
+                self.grouped.retain(|g| g != &path);
+            }
+        }
+        self.mark_views_dirty();
+    }
+
+    /// Bu klasörün kayıtlı görünümünü unut ve Explorer varsayılanlarına dön.
+    fn forget_folder_view(&mut self) {
+        let path = self.tabs[self.active].path.clone();
+        let Some(key) = Self::folder_key(&path) else {
+            return;
+        };
+        self.folder_views.remove(&key);
+        self.grouped.retain(|g| g != &path);
+        self.view_level = 0;
+        self.sort = SortKey::Name;
+        self.asc = true;
+        self.mark_views_dirty();
+        self.save_config();
+        self.toast(crate::i18n::t("Bu klasörün görünümü sıfırlandı"), false);
     }
 
     fn reload_active(&mut self, select: Option<PathBuf>) {
@@ -2297,6 +2450,7 @@ impl App {
             }
             if shortcut(i, Modifiers::CTRL, Key::H) {
                 self.show_hidden = !self.show_hidden;
+                self.remember_view();
                 for t in &mut self.tabs {
                     t.view_dirty = true;
                 }
@@ -2860,20 +3014,34 @@ impl App {
                     self.sort = k;
                     self.asc = k == SortKey::Name || k == SortKey::Type;
                 }
+                self.remember_view();
                 self.mark_views_dirty();
             }
             Action::SetView(l) => {
                 self.view_level = l.min(VIEW_LEVELS.len() - 1);
                 self.tab().scroll_to_cursor = true;
+                self.remember_view();
             }
             Action::TogglePreview => self.pane = if self.pane == 1 { 0 } else { 1 },
             Action::ToggleDetails => self.pane = if self.pane == 2 { 0 } else { 2 },
             Action::ToggleHidden => {
                 self.show_hidden = !self.show_hidden;
                 self.subdirs.clear();
+                self.remember_view();
                 self.mark_views_dirty();
             }
-            Action::ToggleExt => self.show_ext = !self.show_ext,
+            Action::ToggleExt => {
+                self.show_ext = !self.show_ext;
+                self.remember_view();
+            }
+            Action::ToggleRememberViews => {
+                self.remember_views = !self.remember_views;
+                if self.remember_views {
+                    self.remember_view();
+                }
+                self.save_config();
+            }
+            Action::ForgetFolderView => self.forget_folder_view(),
             Action::ToggleDefaultFm => {
                 let target = !self.default_fm.unwrap_or_else(win::is_default_file_manager);
                 let before =
@@ -3782,11 +3950,13 @@ impl App {
                 ui.separator();
                 if ui.radio(self.asc, crate::i18n::t("Artan")).clicked() {
                     self.asc = true;
+                    self.remember_view();
                     self.mark_views_dirty();
                     ui.close_menu();
                 }
                 if ui.radio(!self.asc, crate::i18n::t("Azalan")).clicked() {
                     self.asc = false;
+                    self.remember_view();
                     self.mark_views_dirty();
                     ui.close_menu();
                 }
@@ -3798,11 +3968,13 @@ impl App {
                             if !on {
                                 self.grouped.push(cur.clone());
                             }
+                            self.remember_view();
                             self.mark_views_dirty();
                             ui.close_menu();
                         }
                         if ui.radio(!on, crate::i18n::t("(Yok)")).clicked() {
                             self.grouped.retain(|g| g != &cur);
+                            self.remember_view();
                             self.mark_views_dirty();
                             ui.close_menu();
                         }
@@ -4880,6 +5052,18 @@ impl App {
                 .checked(self.show_ext),
         );
         let id = acts.len() as u32;
+        acts.push(Action::ToggleRememberViews);
+        let mut row = Node::new(crate::i18n::t("Her klasörün görünümünü hatırla"))
+            .with_cmd(Cmd::App(id))
+            .checked(self.remember_views);
+        row.sep = true;
+        show.children.push(row);
+        let id = acts.len() as u32;
+        acts.push(Action::ForgetFolderView);
+        let mut row = Node::new(crate::i18n::t("Klasör görünümünü sıfırla")).with_cmd(Cmd::App(id));
+        row.enabled = !crate::tab::is_virtual(&self.tabs[self.active].path);
+        show.children.push(row);
+        let id = acts.len() as u32;
         acts.push(Action::ToggleDefaultFm);
         let mut row = Node::new(crate::i18n::t("Varsayılan dosya gezgini olarak kullan"))
             .with_cmd(Cmd::App(id));
@@ -5409,6 +5593,7 @@ impl App {
             sort,
             asc,
             item_rects,
+            remember_views,
             ..
         } = self;
         let (sort, asc, show_ext, accent) = (*sort, *asc, *show_ext, *accent);
@@ -5465,8 +5650,19 @@ impl App {
         // İlk karede panel genişliği henüz oturmamış olur (yan paneller çizilmemiş);
         // sütun genişlikleri o karede oluşursa çarpık değerler kalıcılaşır. Bu yüzden
         // ilk iki kare ayrı bir anahtar kullanır, gerçek durum oturmuş genişlikle doğar.
-        let salt = if ui.ctx().cumulative_pass_nr() < 3 {
+        let per_folder;
+        let salt: &str = if ui.ctx().cumulative_pass_nr() < 3 {
             "details_cols_boot"
+        } else if *remember_views {
+            // Her klasör kendi sütun genişliklerini hatırlar: egui_extras durumu bu
+            // anahtarın altında tutar (bkz. Config.folder_views).
+            match Self::folder_key(&t.path) {
+                Some(k) => {
+                    per_folder = format!("details_cols_v3:{k}");
+                    &per_folder
+                }
+                None => "details_cols_v3",
+            }
         } else {
             "details_cols_v3"
         };
@@ -7070,6 +7266,9 @@ impl eframe::App for App {
                 t.rebuild_view(sort, asc, hidden, grouped);
             }
         }
+        // Klasör değiştiyse o klasörün kendi görünümünü uygula (sekme, gezinti,
+        // adres çubuğu, geri/ileri — hepsi buradan geçer).
+        self.sync_folder_view();
         // Yeni oluşturulan öğe listeye gelince yerinde adlandırmaya geç
         {
             let t = &mut self.tabs[self.active];
@@ -7154,15 +7353,24 @@ impl eframe::App for App {
         if !self.jobs.is_empty() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
-        // Ayarları/sekmeleri değiştiyse arada bir kaydet (çökme veya zorla kapatmada kaybolmasın)
-        if self.last_autosave.elapsed() > Duration::from_secs(3) {
-            self.last_autosave = Instant::now();
-            self.save_config();
+        // Kaydırma sırasında diske yazma pahalı işler ertelensin; hiç durmayan
+        // kaydırmalarda kayıt, hareketsizlikte yapılır (save_config UI dişi
+        // disk yazımı — kaydırma sırasında 80 ms'lik takılmalar yapar).
+        let scroll_motion = ctx.input(|i| {
+            i.smooth_scroll_delta != egui::Vec2::ZERO || i.raw_scroll_delta != egui::Vec2::ZERO
+        });
+        if !scroll_motion {
+            // Ayarları/sekmeleri değiştiyse arada bir kaydet (çökme veya zorla kapatmada kaybolmasın)
+            if self.last_autosave.elapsed() > Duration::from_secs(3) {
+                self.last_autosave = Instant::now();
+                self.save_config();
+            }
+            if self.drives_refreshed.elapsed() > Duration::from_secs(20) {
+                self.drives_refreshed = Instant::now();
+                self.refresh_drives();
+            }
         }
-        if self.drives_refreshed.elapsed() > Duration::from_secs(20) {
-            self.drives_refreshed = Instant::now();
-            self.refresh_drives();
-        }
+        ctx.request_repaint_after(Duration::from_secs(20));
         ctx.request_repaint_after(Duration::from_secs(20));
 
         // Dışarıdan sürüklenip bırakılan dosyalar → bu klasöre kopyala
@@ -7182,6 +7390,7 @@ impl eframe::App for App {
         }
 
         self.handle_keys(ctx, &mut actions);
+        let perf_pre = perf_t0.elapsed().as_secs_f32() * 1000.0;
 
         // Explorer düzeni: sekme şeridi, gezinme satırı, komut çubuğu (aralarında ince çizgiler),
         // solda gezinti bölmesi, altta durum çubuğu
@@ -7284,6 +7493,7 @@ impl eframe::App for App {
                     }
                 });
         }
+        let perf_center = perf_t0.elapsed().as_secs_f32() * 1000.0;
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
@@ -7306,6 +7516,7 @@ impl eframe::App for App {
                 }
             });
 
+        let perf_dialogs = perf_t0.elapsed().as_secs_f32() * 1000.0;
         self.dialogs(ctx);
         self.overlays(ctx);
         self.drag_overlay(ctx);
@@ -7345,7 +7556,23 @@ impl eframe::App for App {
             self.last_title = title;
         }
         if std::env::var_os("SWIFT_EXPLORER_WHEELLOG").is_some() {
-            perf_log(ctx, &self.images, perf_t0.elapsed().as_secs_f32() * 1000.0);
+            perf_log(
+                ctx,
+                &self.images,
+                perf_pre,
+                perf_center - perf_pre,
+                perf_dialogs - perf_center,
+                perf_t0.elapsed().as_secs_f32() * 1000.0 - perf_dialogs,
+            );
+        }
+        // Kaydırma hareketi sırasında: Windows, art arda gelen giriş
+        // mesajları yüzünden WM_PAINT'i erteleyebiliyor (~30 Hz'e kilitlenme);
+        // zamanlayıcı nudge ile çerçeve hızını 60 Hz'de tut.
+        let scroll_motion = ctx.input(|i| {
+            i.smooth_scroll_delta != egui::Vec2::ZERO || i.raw_scroll_delta != egui::Vec2::ZERO
+        });
+        if scroll_motion {
+            ctx.request_repaint_after(Duration::from_millis(15));
         }
     }
 

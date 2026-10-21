@@ -348,4 +348,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Ayrıntılar bölmesi (Alt+Shift+P)", "詳細ウィンドウ (Alt+Shift+P)"),
     ("Bu tür için önizleme yok.", "この種類のプレビューは利用できません。"),
     ("Önizlemek için bir öğe seçin.", "プレビューする項目を選択してください。"),
+    ("Her klasörün görünümünü hatırla", "フォルダーごとに表示を記憶する"),
+    ("Klasör görünümünü sıfırla", "このフォルダーの表示をリセット"),
+    ("Bu klasörün görünümü sıfırlandı", "このフォルダーの表示をリセットしました"),
 ];
