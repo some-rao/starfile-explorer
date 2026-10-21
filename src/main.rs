@@ -81,6 +81,10 @@ fn main() -> eframe::Result<()> {
                 eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png"))
                     .unwrap_or_default(),
             ),
+        // vsync kapalı: sunum kuyruğu CPU'yu vblank'ta bekletmesin — kaydırma
+        // pompası ~60 Hz ritmi verirken çizim döngüsü bağımsız ilerlesin.
+        // DWM kompozisyon Windows'ta yamukluğu yine engeller.
+        vsync: false,
         ..Default::default()
     };
     #[cfg(windows)]

@@ -530,6 +530,10 @@ pub struct App {
     pane2_active: usize,
     /// `tabs` hangi bölmeyi tutuyor: 0 sol, 1 sağ
     focus: u8,
+    /// Şu an çizilen bölme (0 sol, 1 sağ). Bölünmüş görünümde iki bölme de aynı
+    /// pencere öğelerini kullandığından, egui kimliklerinin çakışmaması için
+    /// kimliklere bu numara eklenir (bkz. `split_area`).
+    pane_no: u8,
     background: bool,
     /// Sonraki açılışları bu süreç karşılıyor; kapanınca gizlenip bekleyebilir
     resident: bool,
@@ -590,6 +594,10 @@ pub struct App {
     menu: Option<MenuState>,
     saved_config: String,
     last_autosave: Instant,
+    /// Kaydırma pompası açık mı (WM_TIMER tabanlı ~60 Hz çizim tetikleyicisi).
+    scroll_pump_on: bool,
+    /// Katı harekette görülen son zaman (pompayı 400 ms yumuşatma ile kapatır).
+    last_scroll: Option<Instant>,
     /// Açılış: pencere ilk içerik (liste + ikonlar) hazır olana dek gizli
     #[cfg_attr(not(windows), allow(dead_code))]
     started: Instant,
@@ -991,11 +999,15 @@ fn wheel_log(ctx: &egui::Context) {
 /// (SWIFT_EXPLORER_WHEELLOG=1). Kaydırma takıntısının çerçeve maliyetinden
 /// mi (dosya/ikon yükleme, disk yazımı) yoksa giriş kararkolundan mı
 /// geldiğini ayırt etmek için; tema sonunda kaldırılacak.
+#[allow(clippy::too_many_arguments)]
 fn perf_log(
     ctx: &egui::Context,
     images: &ImageCache,
     pre_ms: f32,
-    panels_ms: f32,
+    tabnav_ms: f32,
+    cmdstat_ms: f32,
+    sidebar_ms: f32,
+    pane_ms: f32,
     center_ms: f32,
     post_ms: f32,
 ) {
@@ -1036,11 +1048,11 @@ fn perf_log(
         let _ = match gap_ms {
             Some(g) => writeln!(
                 f,
-                "PERF gap={g:>6.1} pre={pre_ms:>5.1} pan={panels_ms:>5.1} ctr={center_ms:>5.1} post={post_ms:>5.1} wheel={wheel} iconq={icon_q}"
+                "PERF gap={g:>6.1} pre={pre_ms:>4.1} nav={tabnav_ms:>4.1} cmd={cmdstat_ms:>4.1} sbar={sidebar_ms:>4.1} pane={pane_ms:>4.1} ctr={center_ms:>4.1} post={post_ms:>4.1} wheel={wheel} iconq={icon_q}"
             ),
             None => writeln!(
                 f,
-                "PERF gap=  --- pre={pre_ms:>5.1} pan={panels_ms:>5.1} ctr={center_ms:>5.1} post={post_ms:>5.1} wheel={wheel} iconq={icon_q}"
+                "PERF gap=  --- pre={pre_ms:>4.1} nav={tabnav_ms:>4.1} cmd={cmdstat_ms:>4.1} sbar={sidebar_ms:>4.1} pane={pane_ms:>4.1} ctr={center_ms:>4.1} post={post_ms:>4.1} wheel={wheel} iconq={icon_q}"
             ),
         };
     }
@@ -1912,6 +1924,7 @@ impl App {
             pane2: Vec::new(),
             pane2_active: 0,
             focus: 0,
+            pane_no: 0,
             background: cfg.background,
             resident,
             autostart: win::autostart(),
@@ -1963,6 +1976,8 @@ impl App {
             menu: None,
             saved_config: String::new(),
             last_autosave: Instant::now(),
+            scroll_pump_on: false,
+            last_scroll: None,
             started: Instant::now(),
             frames: 0,
             revealed: false,
@@ -2493,6 +2508,27 @@ impl App {
 // ================================================================ klavye + eylemler
 
 impl App {
+    /// Kaydırma pompası durum yönetimi: harekette başlat, 400 ms sessizlikte durdur.
+    fn scroll_pump(&mut self, active: bool) {
+        if active {
+            if !self.scroll_pump_on {
+                self.scroll_pump_on = true;
+                crate::system::scroll_pump_start();
+            }
+            self.last_scroll = Some(Instant::now());
+        } else if self.scroll_pump_on {
+            // Kısa duraklamalar pompayı kapatmasın; 400 ms söylemeden bitir.
+            let idle = self
+                .last_scroll
+                .map(|t| t.elapsed() > Duration::from_millis(400))
+                .unwrap_or(true);
+            if idle {
+                self.scroll_pump_on = false;
+                crate::system::scroll_pump_stop();
+            }
+        }
+    }
+
     fn handle_keys(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
         let typing = ctx.wants_keyboard_input();
         let focused = ctx.input(|i| i.focused);
@@ -2775,16 +2811,20 @@ impl App {
                 }
             });
         }
-        // Boşluk: seçili dosyayı PowerToys Peek ile önizle (Ctrl+Boşluk çoklu seçimdir)
+        // Boşluk: seçili dosyayı PowerToys Peek ile önizle (Ctrl+Boşluk çoklu seçimdir).
+        // Önizleme katmanı açıkken Boşluk onu kapatır (aç/kapa).
         if !ctrl
             && !shift
             && matches!(self.dialog, Dialog::None)
-            && self.quick.is_none()
             && self.tabs[self.active].lists_files()
         {
             ctx.input(|i| {
                 if i.key_pressed(Key::Space) {
-                    actions.push(Action::Peek);
+                    if self.quick.is_some() {
+                        self.quick = None;
+                    } else {
+                        actions.push(Action::Peek);
+                    }
                 }
             });
         }
@@ -4768,7 +4808,9 @@ impl App {
 
     /// Açılıp kapanabilen grup başlığı (Giriş/Bu bilgisayar sayfaları için)
     fn page_group(&mut self, ui: &mut egui::Ui, key: &str, label: &str) -> bool {
-        let id = egui::Id::new(("page_group", key));
+        // Kimlik bölmeye özeldir (bkz. `split_area`): iki bölme de Giriş sayfasındaysa
+        // aynı kimlik çakışır ve egui kırmızı uyarı çizer.
+        let id = egui::Id::new(("page_group", self.pane_no, key));
         let open = !ui.ctx().data(|d| d.get_temp::<bool>(id)).unwrap_or(false);
         let (rect, _) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), 28.0), Sense::hover());
@@ -5866,6 +5908,8 @@ impl App {
                     ui.available_width().max(80.0)
                 };
                 ui.allocate_ui_with_layout(egui::vec2(w, h), Layout::top_down(Align::Min), |ui| {
+                    // Çizilen bölmenin numarası: egui kimlikleri buna göre ayrışır.
+                    self.pane_no = pane;
                     if pane != focus {
                         self.swap_panes();
                     }
@@ -5927,6 +5971,7 @@ impl App {
                 self.focus = p;
             }
         }
+        self.pane_no = self.focus;
     }
 
     fn file_area(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
@@ -5937,9 +5982,11 @@ impl App {
         };
 
         // Boş alan: tık seçimi temizler, sürükleme seçim dikdörtgeni çizer, sağ tık klasör menüsü
+        // Kimlik bölmeye özeldir: bölünmüş görünümde iki liste aynı kimliği kullanırsa
+        // egui çakışma uyarısı çizer (kırmızı çerçeveler).
         let bg = ui.interact(
             ui.max_rect(),
-            egui::Id::new("list_bg"),
+            egui::Id::new(("list_bg", self.pane_no)),
             Sense::click_and_drag(),
         );
         if bg.clicked() {
@@ -6065,9 +6112,11 @@ impl App {
             item_rects,
             remember_views,
             git_column,
+            pane_no,
             ..
         } = self;
         let (sort, asc, show_ext, accent) = (*sort, *asc, *show_ext, *accent);
+        let pane_no = *pane_no;
         let t = &mut tabs[*active];
         let in_search = t.search.is_some();
         // Klon yerine kilit hizasını kullan: harita her karede yeniden kopyalanmaz.
@@ -6125,23 +6174,23 @@ impl App {
         // İlk karede panel genişliği henüz oturmamış olur (yan paneller çizilmemiş);
         // sütun genişlikleri o karede oluşursa çarpık değerler kalıcılaşır. Bu yüzden
         // ilk iki kare ayrı bir anahtar kullanır, gerçek durum oturmuş genişlikle doğar.
-        let per_folder;
-        let salt: &str = if ui.ctx().cumulative_pass_nr() < 3 {
-            "details_cols_boot"
-        } else if *remember_views {
-            // Her klasör kendi sütun genişliklerini hatırlar: egui_extras durumu bu
-            // anahtarın altında tutar (bkz. Config.folder_views). Git sütunu açık/kapalı
-            // farklı sütun sayısı demek; ayrı anahtar kullanılır.
-            match Self::folder_key(&t.path) {
-                Some(k) => {
-                    per_folder = format!("details_cols_v4:{k}:{}", show_git as u8);
-                    &per_folder
+        let salt: String = format!(
+            "{}:p{}",
+            if ui.ctx().cumulative_pass_nr() < 3 {
+                "details_cols_boot".to_string()
+            } else if *remember_views {
+                // Her klasör kendi sütun genişliklerini hatırlar: egui_extras durumu bu
+                // anahtarın altında tutar (bkz. Config.folder_views). Git sütunu açık/kapalı
+                // farklı sütun sayısı demek; ayrı anahtar kullanılır.
+                match Self::folder_key(&t.path) {
+                    Some(k) => format!("details_cols_v4:{k}:{}", show_git as u8),
+                    None => "details_cols_v4".to_string(),
                 }
-                None => "details_cols_v4",
-            }
-        } else {
-            "details_cols_v4"
-        };
+            } else {
+                "details_cols_v4".to_string()
+            },
+            pane_no
+        );
         // egui_extras, her sütun ayırıcısını tablo boyunca ince bir çizgiyle gösteriyor;
         // Explorer sütun çizgisi çizmez (yalnızca üzerine gelince imleç değişir).
         // Çizgileri tablo süresince kapatıyoruz.
@@ -6323,7 +6372,7 @@ impl App {
                                     rect,
                                     crate::i18n::t(&g.label),
                                     !g.collapsed,
-                                    egui::Id::new(("ghead", &g.label)),
+                                    egui::Id::new(("ghead", pane_no, &g.label)),
                                 )
                                 .clicked()
                                 {
@@ -6370,7 +6419,7 @@ impl App {
                         match renaming.as_mut().filter(|rn| rn.path == e.path) {
                             Some(rn) => {
                                 let out = egui::TextEdit::singleline(&mut rn.text)
-                                    .id(egui::Id::new("inline_rename"))
+                                    .id(egui::Id::new(("inline_rename", pane_no)))
                                     .desired_width(f32::INFINITY)
                                     .show(ui);
                                 if rn.first {
@@ -6445,7 +6494,7 @@ impl App {
                     row.col(|ui| {
                         // Başlık sağa yaslı; değer de aynı sağ kenara oturmalı.
                         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            ui.label(RichText::new(fsutil::format_time(e.modified)).color(weak));
+                            ui.label(RichText::new(e.time_label.as_str()).color(weak));
                         });
                     });
                     if show_type {
@@ -6561,9 +6610,11 @@ impl App {
             item_rects,
             grid_scroll,
             type_names,
+            pane_no,
             ..
         } = self;
         let (show_ext, accent) = (*show_ext, *accent);
+        let pane_no = *pane_no;
         let t = &mut tabs[*active];
         let in_search = t.search.is_some();
         let n = t.view.len();
@@ -6643,7 +6694,7 @@ impl App {
                                 .shrink2(egui::vec2(0.0, 3.0)),
                             crate::i18n::t(&g.label),
                             !g.collapsed,
-                            egui::Id::new(("ghead", &g.label)),
+                            egui::Id::new(("ghead", pane_no, &g.label)),
                         )
                         .clicked()
                         {
@@ -6739,7 +6790,7 @@ impl App {
                                         .max_rect(name_rect.expand2(egui::vec2(18.0, 0.0))),
                                 );
                                 let out = egui::TextEdit::singleline(&mut rn.text)
-                                    .id(egui::Id::new("inline_rename"))
+                                    .id(egui::Id::new(("inline_rename", pane_no)))
                                     .horizontal_align(Align::Center)
                                     .desired_width(f32::INFINITY)
                                     .show(&mut child);
@@ -6802,10 +6853,7 @@ impl App {
                                     &[&fsutil::format_size(e.size)],
                                 ));
                             }
-                            ui.label(crate::i18n::tf(
-                                "Değiştirme: {}",
-                                &[&fsutil::format_time(e.modified)],
-                            ));
+                            ui.label(crate::i18n::tf("Değiştirme: {}", &[&e.time_label]));
                         });
                         if resp.secondary_clicked()
                             && !(NATIVE_MENU && resp.ctx.input(|i| i.modifiers.shift))
@@ -8082,7 +8130,6 @@ impl eframe::App for App {
             }
         }
         ctx.request_repaint_after(Duration::from_secs(20));
-        ctx.request_repaint_after(Duration::from_secs(20));
 
         // Dışarıdan sürüklenip bırakılan dosyalar → bu klasöre kopyala
         let dropped: Vec<PathBuf> = ctx.input(|i| {
@@ -8141,6 +8188,7 @@ impl eframe::App for App {
                 self.nav_bar(ui, &mut actions);
             });
         hline(ctx, r.response.rect);
+        let perf_nav = perf_t0.elapsed().as_secs_f32() * 1000.0;
         let r = egui::TopBottomPanel::top("cmd")
             .frame(
                 egui::Frame::new()
@@ -8173,6 +8221,7 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 self.status_bar(ui, &mut actions);
             });
+        let perf_status = perf_t0.elapsed().as_secs_f32() * 1000.0;
         egui::SidePanel::left("nav_pane")
             .resizable(true)
             .default_width((210.0 * text_factor()).round())
@@ -8190,6 +8239,7 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 self.sidebar(ui, &mut actions);
             });
+        let perf_sidebar = perf_t0.elapsed().as_secs_f32() * 1000.0;
         if self.pane != 0 {
             egui::SidePanel::right("sidepane")
                 .resizable(true)
@@ -8265,24 +8315,23 @@ impl eframe::App for App {
             self.last_title = title;
         }
         if std::env::var_os("SWIFT_EXPLORER_WHEELLOG").is_some() {
+            let perf_now = perf_t0.elapsed().as_secs_f32() * 1000.0;
             perf_log(
                 ctx,
                 &self.images,
                 perf_pre,
-                perf_center - perf_pre,
+                perf_nav - perf_pre,
+                perf_status - perf_nav,
+                perf_sidebar - perf_status,
+                perf_center - perf_sidebar,
                 perf_dialogs - perf_center,
-                perf_t0.elapsed().as_secs_f32() * 1000.0 - perf_dialogs,
+                perf_now - perf_dialogs,
             );
         }
-        // Kaydırma hareketi sırasında: Windows, art arda gelen giriş
-        // mesajları yüzünden WM_PAINT'i erteleyebiliyor (~30 Hz'e kilitlenme);
-        // zamanlayıcı nudge ile çerçeve hızını 60 Hz'de tut.
-        let scroll_motion = ctx.input(|i| {
-            i.smooth_scroll_delta != egui::Vec2::ZERO || i.raw_scroll_delta != egui::Vec2::ZERO
-        });
-        if scroll_motion {
-            ctx.request_repaint_after(Duration::from_millis(15));
-        }
+        // Kaydırma pompası: Windows'ta WM_PAINT düşük öncelikli iletidir; dokunmatik
+        // pan giriş kuyruğunu ~30 Hz'de beslediğinden çizim olay hızına kilitlenir.
+        // WM_TIMER pompası kuyruk boşaldığı an yeniden çizim isteyerek bunu kırar.
+        self.scroll_pump(scroll_motion);
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {

@@ -374,6 +374,7 @@ mod tests {
             hidden: false,
             ext: ext.to_string(),
             plain_dir: is_dir,
+            time_label: crate::fsutil::format_time(Some(SystemTime::now())),
         }
     }
 

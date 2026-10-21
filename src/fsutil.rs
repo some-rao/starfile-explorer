@@ -70,6 +70,9 @@ pub struct Entry {
     /// Windows klasöre özel ikonu (desktop.ini) yalnızca salt okunur ya da sistem
     /// özniteliği varsa uygular; bağlantı noktaları da ayrı tutulur.
     pub plain_dir: bool,
+    /// Önceden biçimlenmiş değiştirme tarihi ("gün.ay.yıl saat:dakika").
+    /// Liste satırı her karede yazması için krono dönüşümü tekrarlanmasın.
+    pub time_label: String,
 }
 
 impl Entry {
@@ -100,6 +103,7 @@ impl Entry {
             plain_dir: cfg!(windows)
                 && is_dir
                 && attrs & (ATTR_READONLY | ATTR_SYSTEM | ATTR_REPARSE) == 0,
+            time_label: format_time(md.modified().ok()),
         }
     }
 }

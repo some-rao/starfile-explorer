@@ -11,6 +11,9 @@ static DIRTY: AtomicBool = AtomicBool::new(false);
 static CTX: OnceLock<egui::Context> = OnceLock::new();
 static HWND: AtomicIsize = AtomicIsize::new(0);
 
+/// Kaydırma pompası zamanlayıcısının kimliği (WM_TIMER wparam'ında görünür).
+pub const SCROLL_PUMP_ID: usize = 0x54C0;
+
 /// Ana pencere tutamacını kaydet; DWM çağrıları pencere oluştuktan sonra yapılabilir.
 pub fn set_hwnd(hwnd: isize) {
     HWND.store(hwnd, Ordering::Relaxed);
@@ -48,6 +51,7 @@ mod imp {
         DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
         DWMWCP_ROUND,
     };
+    use windows::Win32::UI::WindowsAndMessaging::{KillTimer, SetTimer};
     use windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         SystemParametersInfoW, SPI_GETCLIENTAREAANIMATION, SPI_GETWHEELSCROLLLINES,
@@ -164,6 +168,32 @@ mod imp {
         lines.clamp(1, 12)
     }
 
+    /// Kaydırma sırasında ~60 Hz çizim pompasını başlat.
+    ///
+    /// Windows'ta WM_PAINT en düşük öncelikli iletidir; dokunmatik pan giriş
+    /// kuyruğunu sürekli beslediğinde çizim olay hızına kilitlenir. WM_TIMER
+    /// tikleri kuyruk boşaldığı anda yeniden çizim talep etmeyi sağlar.
+    pub fn scroll_pump_start() {
+        let hwnd = super::HWND.load(Ordering::Relaxed);
+        if hwnd == 0 {
+            return;
+        }
+        unsafe {
+            let _ = SetTimer(HWND(hwnd as *mut c_void), super::SCROLL_PUMP_ID, 16, None);
+        }
+    }
+
+    /// Kaydırma pompasını durdur.
+    pub fn scroll_pump_stop() {
+        let hwnd = super::HWND.load(Ordering::Relaxed);
+        if hwnd == 0 {
+            return;
+        }
+        unsafe {
+            let _ = KillTimer(HWND(hwnd as *mut c_void), super::SCROLL_PUMP_ID);
+        }
+    }
+
     /// Yuvarlatılmış köşeler ve koyu pencere çerçevesi.
     ///
     /// `DWMWA_USE_IMMERSIVE_DARK_MODE` özel başlık çubuğu kullanan pencerelerde ince
@@ -218,6 +248,11 @@ mod imp {
     pub fn wheel_scroll_lines() -> u32 {
         3
     }
+
+    /// Linux'ta çizim pompası gerekmez; egui kendi döngüsünü yönetir.
+    pub fn scroll_pump_start() {}
+
+    pub fn scroll_pump_stop() {}
 
     pub fn apply_backdrop(_dark: bool) {}
 }
