@@ -555,6 +555,9 @@ static TABLE: &[(&str, &str)] = &[
     ("Bu klasörün görünümü sıfırlandı", "This folder's view was reset"),
     ("Şuraya kopyala…", "Copy to…"),
     ("Şuraya taşı…", "Move to…"),
+    ("Bu klasör", "This folder"),
+    ("Alt klasörler dahil", "Including subfolders"),
+    ("Filtreyi kaldır", "Remove filter"),
 ];
 
 #[cfg(test)]

@@ -353,4 +353,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Bu klasörün görünümü sıfırlandı", "このフォルダーの表示をリセットしました"),
     ("Şuraya kopyala…", "コピー先へ…"),
     ("Şuraya taşı…", "移動先へ…"),
+    ("Bu klasör", "このフォルダー"),
+    ("Alt klasörler dahil", "サブフォルダーを含む"),
+    ("Filtreyi kaldır", "フィルターを解除"),
 ];

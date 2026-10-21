@@ -356,4 +356,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ),
     ("Şuraya kopyala…", "Copier vers…"),
     ("Şuraya taşı…", "Déplacer vers…"),
+    ("Bu klasör", "Ce dossier"),
+    ("Alt klasörler dahil", "Sous-dossiers inclus"),
+    ("Filtreyi kaldır", "Supprimer le filtre"),
 ];

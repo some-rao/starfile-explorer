@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::fsutil::{self, Conflict, Entry, Job, JobKind, PreviewData, SortKey};
 use crate::menu::{self, Cmd, Menu, Node, Quick};
 use crate::newfile;
+use crate::query::{Query, SearchScope};
 use crate::scheme;
 use crate::shell::{self, ImageCache, Img, MenuResult};
 use crate::tab::{normalize, Tab, THIS_PC};
@@ -381,6 +382,10 @@ enum Action {
     RemoveBookmark(PathBuf),
     StartSearch,
     ExitSearch,
+    /// Aramanın kapsamını değiştir (çalışan aramayı yeniden başlatır)
+    SetSearchScope(SearchScope),
+    /// Filtre çipini kaldır
+    RemoveChip(usize),
     Sort(SortKey),
     SetView(usize),
     DropPaths {
@@ -1281,6 +1286,7 @@ pub(crate) mod g {
     pub const CHEVRON_DOWN: &str = "\u{E70D}";
     pub const PC: &str = "\u{E7F4}";
     pub const SEARCH: &str = "\u{E721}";
+    pub const SCOPE: &str = "\u{E71C}";
     pub const NEW: &str = "\u{ECC8}";
     pub const CUT: &str = "\u{E8C6}";
     pub const COPY: &str = "\u{E8C8}";
@@ -1325,6 +1331,7 @@ pub(crate) mod g {
     pub const CHEVRON_DOWN: &str = "\u{F2A2}";
     pub const PC: &str = "\u{F359}";
     pub const SEARCH: &str = "\u{F68F}";
+    pub const SCOPE: &str = "\u{F0B0}";
     pub const NEW: &str = "\u{F10C}";
     pub const CUT: &str = "\u{F33A}";
     pub const COPY: &str = "\u{F32B}";
@@ -2190,6 +2197,23 @@ impl App {
         t.load(false, &ctx);
     }
 
+    /// Arama kökleri: kapsam ve sanal konuma göre (Bu bilgisayar, Galeri).
+    fn search_roots(&self, scope: SearchScope) -> Vec<PathBuf> {
+        let t = &self.tabs[self.active];
+        if scope == SearchScope::ThisPc || t.is_pc() {
+            self.drives
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|d| d.root.clone())
+                .collect()
+        } else if t.is_gallery() {
+            dirs::picture_dir().into_iter().collect()
+        } else {
+            vec![t.path.clone()]
+        }
+    }
+
     /// Yapıştırma/bırakma: çakışma varsa sor, yoksa başlat.
     fn start_transfer(&mut self, files: Vec<PathBuf>, dest: PathBuf, cut: bool) {
         if dest.as_os_str().is_empty() {
@@ -3005,7 +3029,13 @@ impl App {
             }
             Action::StartSearch => {
                 self.renaming = None;
-                let roots = if self.tab().is_pc() {
+                let scope = self.tabs[self.active].scope;
+                if scope == SearchScope::Folder {
+                    // Yalnızca bu klasör: arka plan motoruna gerek yok, filtre bellekte.
+                    self.tabs[self.active].view_dirty = true;
+                    return;
+                }
+                let roots = if scope == SearchScope::ThisPc || self.tab().is_pc() {
                     self.drives
                         .lock()
                         .unwrap()
@@ -3018,9 +3048,32 @@ impl App {
                 } else {
                     vec![self.tab().path.clone()]
                 };
-                self.tab().start_search(roots, &ctx);
+                self.tabs[self.active].start_search(roots, &ctx);
             }
             Action::ExitSearch => self.tab().exit_search(&ctx),
+            Action::SetSearchScope(s) => {
+                let running = self.tabs[self.active].search.is_some();
+                self.tabs[self.active].scope = s;
+                self.tabs[self.active].view_dirty = true;
+                if running {
+                    if s == SearchScope::Folder {
+                        // Sonuç listesinden klasöre dön; sorgu metni kutuda kalır
+                        self.tabs[self.active].cancel_search();
+                        self.tabs[self.active].load(true, &ctx);
+                    } else {
+                        let roots = self.search_roots(s);
+                        self.tabs[self.active].start_search(roots, &ctx);
+                    }
+                }
+            }
+            Action::RemoveChip(i) => {
+                let t = self.tab();
+                let q = Query::parse(&t.filter);
+                if i < q.chips.len() {
+                    t.filter = q.without_chip(i);
+                    t.view_dirty = true;
+                }
+            }
             Action::Sort(k) => {
                 if self.sort == k {
                     self.asc = !self.asc;
@@ -3492,11 +3545,63 @@ impl App {
                         actions.push(Action::StartSearch);
                     }
                 }
+                // Arama kapsamı düğmesi (kutunun solunda): bu klasör / alt klasörler / bu bilgisayar
+                let (icon, tip) = match t.scope {
+                    SearchScope::Folder => (g::FOLDER, "Bu klasör"),
+                    SearchScope::Subfolders => (g::SCOPE, "Alt klasörler dahil"),
+                    SearchScope::ThisPc => (g::PC, "Bu bilgisayar"),
+                };
+                let btn = egui::Button::new(fl(icon, 14.0).color(p.weak))
+                    .frame(false)
+                    .min_size(egui::vec2(26.0, 26.0));
+                egui::menu::menu_custom_button(ui, btn, |ui| {
+                    ui.set_min_width(180.0);
+                    for (s, label) in [
+                        (SearchScope::Folder, "Bu klasör"),
+                        (SearchScope::Subfolders, "Alt klasörler dahil"),
+                        (SearchScope::ThisPc, "Bu bilgisayar"),
+                    ] {
+                        if ui
+                            .selectable_label(t.scope == s, crate::i18n::t(label))
+                            .clicked()
+                        {
+                            actions.push(Action::SetSearchScope(s));
+                            ui.close_menu();
+                        }
+                    }
+                })
+                .response
+                .on_hover_text(crate::i18n::t(tip));
                 ui.allocate_ui_with_layout(ui.available_size(), Layout::left_to_right(Align::Center), |ui| {
                     self.address_bar(ui, actions);
                 });
             });
         });
+
+        // Sorgu çipleri (ext:pdf, size:>1mb, -taslak ...): tek tıkla kaldırılır
+        let chips = Query::parse(&self.tabs[self.active].filter).chips;
+        if !chips.is_empty() {
+            let p = pal_of(ui);
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                ui.add_space(6.0);
+                for (i, c) in chips.iter().enumerate() {
+                    let text = RichText::new(format!("{}  ✕", c.token)).size(text_size(12.0));
+                    let btn = egui::Button::new(text)
+                        .fill(p.field)
+                        .stroke(p.field_stroke)
+                        .min_size(egui::vec2(0.0, 20.0));
+                    if ui
+                        .add(btn)
+                        .on_hover_text(crate::i18n::t("Filtreyi kaldır"))
+                        .clicked()
+                    {
+                        actions.push(Action::RemoveChip(i));
+                    }
+                }
+            });
+        }
     }
 
     /// Adres çubuğundaki parçalar: (gidilecek yer, görünen ad). Explorer gibi bilinen klasörler
@@ -4679,7 +4784,8 @@ impl App {
                 ui.add_space(6.0);
                 if self.page_group(ui, "drives", crate::i18n::t("Cihazlar ve sürücüler")) {
                     // Yazarken sürücüleri süz; Enter tüm sürücülerde arar
-                    let pat = fsutil::Pattern::new(&self.tabs[self.active].filter);
+                    let q = Query::parse(&self.tabs[self.active].filter);
+                    let pat = q.name_pattern().clone();
                     let drives: Vec<DriveInfo> = self
                         .drives
                         .lock()
@@ -6686,6 +6792,13 @@ impl App {
                     bar(ui);
                 }
                 if let Some(srch) = &t.search {
+                    let scope = match t.scope {
+                        SearchScope::Folder => crate::i18n::t("Bu klasör"),
+                        SearchScope::Subfolders => crate::i18n::t("Alt klasörler dahil"),
+                        SearchScope::ThisPc => crate::i18n::t("Bu bilgisayar"),
+                    };
+                    ui.label(RichText::new(scope).color(p.weak));
+                    bar(ui);
                     let scanned = srch.handle.scanned.load(Relaxed);
                     if srch.done {
                         ui.label(

@@ -14,6 +14,8 @@ use std::time::{Duration, Instant, SystemTime};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use crate::query::Query;
+
 const ATTR_READONLY: u32 = 0x1;
 const ATTR_HIDDEN: u32 = 0x2;
 const ATTR_SYSTEM: u32 = 0x4;
@@ -488,7 +490,7 @@ pub struct SearchHandle {
     pub scanned: Arc<AtomicU64>,
 }
 
-pub fn spawn_search(roots: Vec<PathBuf>, pattern: Pattern, ctx: egui::Context) -> SearchHandle {
+pub fn spawn_search(roots: Vec<PathBuf>, query: Query, ctx: egui::Context) -> SearchHandle {
     let (tx, rx) = channel();
     let cancel = Arc::new(AtomicBool::new(false));
     let scanned = Arc::new(AtomicU64::new(0));
@@ -496,7 +498,7 @@ pub fn spawn_search(roots: Vec<PathBuf>, pattern: Pattern, ctx: egui::Context) -
     thread::spawn(move || {
         roots
             .par_iter()
-            .for_each(|r| search_dir(r, &pattern, &tx, &c, &s));
+            .for_each(|r| search_dir(r, &query, &tx, &c, &s));
         let _ = tx.send(SearchMsg::Done);
         ctx.request_repaint();
     });
@@ -509,7 +511,7 @@ pub fn spawn_search(roots: Vec<PathBuf>, pattern: Pattern, ctx: egui::Context) -
 
 fn search_dir(
     dir: &Path,
-    pat: &Pattern,
+    query: &Query,
     tx: &Sender<SearchMsg>,
     cancel: &AtomicBool,
     scanned: &AtomicU64,
@@ -519,6 +521,7 @@ fn search_dir(
     }
     let Ok(rd) = fs::read_dir(dir) else { return };
     scanned.fetch_add(1, Relaxed);
+    let now = chrono::Local::now();
     let mut found = Vec::new();
     let mut subdirs = Vec::new();
     for de in rd.flatten() {
@@ -528,9 +531,10 @@ fn search_dir(
         if attrs & ATTR_DIR != 0 && attrs & ATTR_REPARSE == 0 {
             subdirs.push(path.clone());
         }
-        let name = de.file_name();
-        if pat.matches(&name.to_string_lossy().to_lowercase()) {
-            found.push(Entry::from_metadata(path, &md));
+        // Boyut/tarih/tür çipleri de değerlendirilsin diye öge önce kurulur.
+        let entry = Entry::from_metadata(path, &md);
+        if query.matches(&entry, now) {
+            found.push(entry);
         }
     }
     if !found.is_empty() && tx.send(SearchMsg::Batch(found)).is_err() {
@@ -539,7 +543,7 @@ fn search_dir(
     }
     subdirs
         .par_iter()
-        .for_each(|d| search_dir(d, pat, tx, cancel, scanned));
+        .for_each(|d| search_dir(d, query, tx, cancel, scanned));
 }
 
 // ---------------------------------------------------------------- klasör boyutu

@@ -353,4 +353,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Bu klasörün görünümü sıfırlandı", "此文件夹的视图已重置"),
     ("Şuraya kopyala…", "复制到…"),
     ("Şuraya taşı…", "移动到…"),
+    ("Bu klasör", "此文件夹"),
+    ("Alt klasörler dahil", "包括子文件夹"),
+    ("Filtreyi kaldır", "移除筛选"),
 ];

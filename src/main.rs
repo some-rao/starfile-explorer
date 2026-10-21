@@ -10,6 +10,7 @@ mod menu;
 mod newfile;
 #[cfg(not(windows))]
 mod properties;
+mod query;
 mod scheme;
 #[cfg(feature = "screenshot")]
 mod screenshot;

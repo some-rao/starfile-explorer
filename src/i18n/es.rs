@@ -353,4 +353,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Bu klasörün görünümü sıfırlandı", "Se restableció la vista de esta carpeta"),
     ("Şuraya kopyala…", "Copiar en…"),
     ("Şuraya taşı…", "Mover a…"),
+    ("Bu klasör", "Esta carpeta"),
+    ("Alt klasörler dahil", "Incluir subcarpetas"),
+    ("Filtreyi kaldır", "Quitar filtro"),
 ];

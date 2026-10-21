@@ -8,7 +8,8 @@ use std::time::{Duration, Instant};
 
 use notify::{RecursiveMode, Watcher};
 
-use crate::fsutil::{self, Entry, LoadMsg, Pattern, SearchHandle, SearchMsg, SortKey};
+use crate::fsutil::{self, Entry, LoadMsg, SearchHandle, SearchMsg, SortKey};
+use crate::query::{Query, SearchScope};
 
 /// Explorer'daki "Bu bilgisayar" sanal konumu (Shell ayrıştırma adı; ikonu da bununla alınır)
 pub const THIS_PC: &str = "::{20D04FE0-3AEA-1069-A2D8-08002B30309D}";
@@ -62,6 +63,8 @@ pub struct Tab {
     pub back: Vec<PathBuf>,
     pub forward: Vec<PathBuf>,
     pub filter: String,
+    /// Arama kapsamı: bu klasör / alt klasörler / bu bilgisayar
+    pub scope: SearchScope,
     /// Kayıtlı ama henüz okunmamış sekme
     lazy: bool,
     loader: Option<Receiver<LoadMsg>>,
@@ -139,6 +142,7 @@ impl Tab {
             back: vec![],
             forward: vec![],
             filter: String::new(),
+            scope: SearchScope::default(),
             loader: None,
             progressive: true,
             load_started: Instant::now(),
@@ -338,8 +342,8 @@ impl Tab {
 
     /// `roots`: aranacak klasörler. Bu bilgisayar'da bunlar sürücü kökleridir.
     pub fn start_search(&mut self, roots: Vec<PathBuf>, ctx: &egui::Context) {
-        let pattern = Pattern::new(&self.filter);
-        if pattern.is_empty() {
+        let query = Query::parse(&self.filter);
+        if query.is_empty() {
             return;
         }
         self.cancel_search();
@@ -351,13 +355,12 @@ impl Tab {
         self.view_dirty = true;
         self.search = Some(Search {
             query: self.filter.trim().to_string(),
-            handle: fsutil::spawn_search(roots, pattern, ctx.clone()),
+            handle: fsutil::spawn_search(roots, query, ctx.clone()),
             done: false,
             started: Instant::now(),
             elapsed: Duration::ZERO,
         });
-        // Sonuçlar zaten eşleşiyor; liste filtresini temizle
-        self.filter.clear();
+        // Sorgu metni kutuda kalır: çipler görünür kalır ve sonuçlar canlı daraltılabilir.
     }
 
     pub fn cancel_search(&mut self) {
@@ -369,6 +372,8 @@ impl Tab {
     pub fn exit_search(&mut self, ctx: &egui::Context) {
         if self.search.is_some() {
             self.cancel_search();
+            // Arama kutusu klasöre dönünce boşalır (Explorer gibi)
+            self.filter.clear();
             if self.is_home() {
                 // Bu bilgisayar'da yüklenecek klasör yok, sonuçları elle temizle
                 self.entries.clear();
@@ -519,12 +524,13 @@ impl Tab {
         show_hidden: bool,
         group_by_date: bool,
     ) {
-        let pat = Pattern::new(&self.filter);
+        let query = Query::parse(&self.filter);
+        let now = chrono::Local::now();
         let entries = &self.entries;
         self.view = (0..entries.len())
             .filter(|&i| {
                 let e = &entries[i];
-                (show_hidden || !e.hidden) && (pat.is_empty() || pat.matches(&e.name_lower))
+                (show_hidden || !e.hidden) && (query.is_empty() || query.matches(e, now))
             })
             .collect();
         // Galeri her zaman en yeni fotoğraf/video üstte olacak şekilde sıralanır
