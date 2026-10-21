@@ -553,6 +553,8 @@ static TABLE: &[(&str, &str)] = &[
     ("Her klasörün görünümünü hatırla", "Remember each folder's view"),
     ("Klasör görünümünü sıfırla", "Reset this folder's view"),
     ("Bu klasörün görünümü sıfırlandı", "This folder's view was reset"),
+    ("Şuraya kopyala…", "Copy to…"),
+    ("Şuraya taşı…", "Move to…"),
 ];
 
 #[cfg(test)]

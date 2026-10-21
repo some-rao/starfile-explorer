@@ -18,7 +18,8 @@ use windows::Win32::Graphics::Gdi::{
 };
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
 use windows::Win32::System::Com::{
-    CoInitializeEx, CoTaskMemFree, IDataObject, COINIT_APARTMENTTHREADED,
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, IDataObject, CLSCTX_ALL,
+    COINIT_APARTMENTTHREADED,
 };
 use windows::Win32::System::Ole::{
     DoDragDrop, IDropSource, IDropSource_Impl, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK,
@@ -29,11 +30,12 @@ use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::{
     BHID_DataObject, BHID_SFUIObject, DefSubclassProc, IContextMenu, IContextMenu2, IContextMenu3,
-    IShellFolder, IShellItem, IShellItemArray, IShellItemImageFactory, RemoveWindowSubclass,
-    SHCreateItemFromParsingName, SHCreateShellItemArrayFromIDLists, SHGetFileInfoW,
-    SHParseDisplayName, SetWindowSubclass, CMF_CANRENAME, CMF_EXTENDEDVERBS, CMF_NORMAL,
-    CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX, GCS_VERBW, SHFILEINFOW, SHGFI_TYPENAME,
-    SHGFI_USEFILEATTRIBUTES, SIIGBF, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY, SIIGBF_THUMBNAILONLY,
+    IFileOpenDialog, IShellFolder, IShellItem, IShellItemArray, IShellItemImageFactory,
+    RemoveWindowSubclass, SHCreateItemFromParsingName, SHCreateShellItemArrayFromIDLists,
+    SHGetFileInfoW, SHParseDisplayName, SetWindowSubclass, CMF_CANRENAME, CMF_EXTENDEDVERBS,
+    CMF_NORMAL, CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX, FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS,
+    GCS_VERBW, SHFILEINFOW, SHGFI_TYPENAME, SHGFI_USEFILEATTRIBUTES, SIGDN_FILESYSPATH, SIIGBF,
+    SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY, SIIGBF_THUMBNAILONLY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreatePopupMenu, DestroyMenu, GetAncestor, GetCursorPos, GetMenuItemCount,
@@ -936,6 +938,41 @@ pub fn accent_color() -> Option<egui::Color32> {
             (c >> 8) as u8,
             c as u8,
         ))
+    }
+}
+
+/// Yerel "klasör seç" iletişim kutusu (IFileOpenDialog + FOS_PICKFOLDERS).
+/// Yönetici izni gerekmez; iptal edilirse `None` döner.
+pub fn pick_folder(owner: isize, start: Option<&Path>) -> Option<PathBuf> {
+    // IFileOpenDialog bir STA COM nesnesidir; pencere iş parçacığı aptalca
+    // başlatılmamışsa başlat (zaten başlatılmışsa RPC_E_CHANGED_MODE yok sayılır).
+    const CLSID_FILE_OPEN_DIALOG: windows::core::GUID =
+        windows::core::GUID::from_u128(0xDC1C5A9C_E88A_4DDE_A5A1_60F82A20AEF7);
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let dialog: IFileOpenDialog =
+            CoCreateInstance(&CLSID_FILE_OPEN_DIALOG, None, CLSCTX_ALL).ok()?;
+        let mut opts = dialog.GetOptions().unwrap_or_default();
+        opts |= FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM;
+        let _ = dialog.SetOptions(opts);
+        if let Some(p) = start {
+            if let Ok(folder) = SHCreateItemFromParsingName::<_, _, IShellItem>(&hs(p), None) {
+                let _ = dialog.SetFolder(&folder);
+            }
+        }
+        let hwnd = if owner == 0 {
+            HWND::default()
+        } else {
+            HWND(owner as *mut c_void)
+        };
+        if dialog.Show(hwnd).is_err() {
+            return None;
+        }
+        let item = dialog.GetResult().ok()?;
+        let name = item.GetDisplayName(SIGDN_FILESYSPATH).ok()?;
+        let out = name.to_string().ok();
+        CoTaskMemFree(Some(name.0 as *const c_void));
+        out.filter(|s| !s.is_empty()).map(PathBuf::from)
     }
 }
 

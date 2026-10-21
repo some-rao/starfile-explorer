@@ -351,4 +351,6 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Her klasörün görünümünü hatırla", "记住每个文件夹的视图"),
     ("Klasör görünümünü sıfırla", "重置此文件夹的视图"),
     ("Bu klasörün görünümü sıfırlandı", "此文件夹的视图已重置"),
+    ("Şuraya kopyala…", "复制到…"),
+    ("Şuraya taşı…", "移动到…"),
 ];

@@ -268,3 +268,33 @@ pub fn cursor_outside_window(_hwnd: isize) -> bool {
 pub fn accent_color() -> Option<egui::Color32> {
     None
 }
+
+/// Linux'ta yerel "klasör seç" iletişim kutusu yok; zenity/kdialog varsa kullanılır.
+/// Hiçbiri yoksa `None` döner (komut sessizce iptal edilmiş sayılır).
+pub fn pick_folder(_owner: isize, start: Option<&Path>) -> Option<PathBuf> {
+    let dir = start.map(|p| p.display().to_string());
+    let try_cmd = |prog: &str, args: Vec<String>| -> Option<PathBuf> {
+        let out = std::process::Command::new(prog).args(args).output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if s.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(s))
+        }
+    };
+    let mut args = vec!["--file-selection".to_string(), "--directory".to_string()];
+    if let Some(d) = &dir {
+        args.push(format!("--filename={}/", d.trim_end_matches('/')));
+    }
+    if let Some(p) = try_cmd("zenity", args) {
+        return Some(p);
+    }
+    let mut args = vec!["--getexistingdirectory".to_string()];
+    if let Some(d) = &dir {
+        args.push(d.clone());
+    }
+    try_cmd("kdialog", args)
+}

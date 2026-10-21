@@ -351,4 +351,6 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Her klasörün görünümünü hatırla", "Recordar la vista de cada carpeta"),
     ("Klasör görünümünü sıfırla", "Restablecer la vista de esta carpeta"),
     ("Bu klasörün görünümü sıfırlandı", "Se restableció la vista de esta carpeta"),
+    ("Şuraya kopyala…", "Copiar en…"),
+    ("Şuraya taşı…", "Mover a…"),
 ];

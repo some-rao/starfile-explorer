@@ -338,6 +338,11 @@ enum Action {
     Cut,
     Paste,
     PasteInto(PathBuf),
+    /// "Şuraya kopyala…"/"Şuraya taşı…": hedef klasör seçildikten sonra transfer başlar
+    PickDest {
+        paths: Vec<PathBuf>,
+        cut: bool,
+    },
     Delete {
         permanent: bool,
     },
@@ -2788,6 +2793,15 @@ impl App {
                 let dest = self.tab().path.clone();
                 self.apply(Action::PasteInto(dest));
             }
+            Action::PickDest { paths, cut } => {
+                if !paths.is_empty() {
+                    let start = self.tab().path.clone();
+                    self.renaming = None;
+                    if let Some(dest) = shell::pick_folder(self.hwnd.unwrap_or(0), Some(&start)) {
+                        self.start_transfer(paths, dest, cut);
+                    }
+                }
+            }
             Action::PasteInto(dest) => {
                 let (files, cut) = match (win::clipboard_get_files(), &self.clipboard) {
                     (Some((os, os_cut)), Some((mine, my_cut))) if &os == mine => {
@@ -4046,6 +4060,21 @@ impl App {
                         actions.push(Action::Terminal(cur.clone()));
                         ui.close_menu();
                     }
+                    ui.separator();
+                    ui.add_enabled_ui(has_sel, |ui| {
+                        let paths = self.tabs[self.active].selected_paths();
+                        if ui.button(crate::i18n::t("Şuraya kopyala…")).clicked() {
+                            actions.push(Action::PickDest {
+                                paths: paths.clone(),
+                                cut: false,
+                            });
+                            ui.close_menu();
+                        }
+                        if ui.button(crate::i18n::t("Şuraya taşı…")).clicked() {
+                            actions.push(Action::PickDest { paths, cut: true });
+                            ui.close_menu();
+                        }
+                    });
                     if ui
                         .button(crate::i18n::t("Klasör boyutlarını hesapla"))
                         .clicked()
@@ -4843,6 +4872,29 @@ impl App {
                         |n| n,
                     );
                 }
+                let sel_paths = self.tabs[self.active].selected_paths();
+                app_node(
+                    &mut acts,
+                    &mut m,
+                    "Şuraya kopyala…",
+                    g::COPY,
+                    Action::PickDest {
+                        paths: sel_paths.clone(),
+                        cut: false,
+                    },
+                    |n| n.sep_before(),
+                );
+                app_node(
+                    &mut acts,
+                    &mut m,
+                    "Şuraya taşı…",
+                    g::CUT,
+                    Action::PickDest {
+                        paths: sel_paths,
+                        cut: true,
+                    },
+                    |n| n,
+                );
                 m.quick = vec![
                     quick(&mut acts, Action::Cut, g::CUT, "Kes (Ctrl+X)", true),
                     quick(&mut acts, Action::Copy, g::COPY, "Kopyala (Ctrl+C)", true),

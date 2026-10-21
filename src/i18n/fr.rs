@@ -354,4 +354,6 @@ pub static TABLE: &[(&str, &str)] = &[
         "Bu klasörün görünümü sıfırlandı",
         "L'affichage de ce dossier a été réinitialisé",
     ),
+    ("Şuraya kopyala…", "Copier vers…"),
+    ("Şuraya taşı…", "Déplacer vers…"),
 ];

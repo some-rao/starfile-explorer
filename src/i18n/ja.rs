@@ -351,4 +351,6 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Her klasörün görünümünü hatırla", "フォルダーごとに表示を記憶する"),
     ("Klasör görünümünü sıfırla", "このフォルダーの表示をリセット"),
     ("Bu klasörün görünümü sıfırlandı", "このフォルダーの表示をリセットしました"),
+    ("Şuraya kopyala…", "コピー先へ…"),
+    ("Şuraya taşı…", "移動先へ…"),
 ];
