@@ -80,6 +80,8 @@ struct Config {
     remember_views: bool,
     /// Küçük harfli yol -> klasör görünümü
     folder_views: HashMap<String, FolderView>,
+    /// Ayrıntılar görünümünde Git sütunu gösterilsin
+    git_column: bool,
 }
 
 impl Default for Config {
@@ -105,6 +107,7 @@ impl Default for Config {
             previous_folder_app: None,
             remember_views: true,
             folder_views: HashMap::new(),
+            git_column: true,
         }
     }
 }
@@ -404,6 +407,7 @@ enum Action {
     ToggleExt,
     ToggleRememberViews,
     ForgetFolderView,
+    ToggleGitColumn,
     ToggleDefaultFm,
     ToggleBackground,
     ToggleAutostart,
@@ -489,6 +493,13 @@ pub struct App {
     folder_views: HashMap<String, FolderView>,
     /// Görünümü en son uygulanan klasörün anahtarı; sekme/klasör değişimini yakalar
     view_key: Option<String>,
+    /// Ayrıntılar görünümünde Git sütunu
+    git_column: bool,
+    /// Klasör -> (depo bilgisi, alınma zamanı); 5 sn TTL
+    git_cache: HashMap<PathBuf, (Option<Arc<crate::git::GitInfo>>, Instant)>,
+    git_tx: std::sync::mpsc::Sender<(PathBuf, Option<Arc<crate::git::GitInfo>>)>,
+    git_rx: std::sync::mpsc::Receiver<(PathBuf, Option<Arc<crate::git::GitInfo>>)>,
+    git_pending: std::collections::HashSet<PathBuf>,
     background: bool,
     /// Sonraki açılışları bu süreç karşılıyor; kapanınca gizlenip bekleyebilir
     resident: bool,
@@ -1803,6 +1814,8 @@ impl App {
             })
             .collect();
 
+        let (git_tx, git_rx) = std::sync::mpsc::channel();
+
         let app = App {
             tabs,
             active,
@@ -1821,6 +1834,11 @@ impl App {
             remember_views: cfg.remember_views,
             folder_views: cfg.folder_views,
             view_key: None,
+            git_column: cfg.git_column,
+            git_cache: HashMap::new(),
+            git_tx,
+            git_rx,
+            git_pending: Default::default(),
             background: cfg.background,
             resident,
             autostart: win::autostart(),
@@ -1929,6 +1947,7 @@ impl App {
             grouped: self.grouped.clone(),
             remember_views: self.remember_views,
             folder_views: self.folder_views.clone(),
+            git_column: self.git_column,
             background: self.background,
             auto_update: self.auto_update.load(Relaxed),
             last_update_check: self.last_update_check.load(Relaxed),
@@ -2212,6 +2231,37 @@ impl App {
         } else {
             vec![t.path.clone()]
         }
+    }
+
+    /// Etkin klasörün deposu. Önbellekten döner; bayatsa arka planda tazeler,
+    /// böylece `git status` UI'yı asla bloke etmez.
+    fn git_snapshot(&mut self, ctx: &egui::Context) -> Option<Arc<crate::git::GitInfo>> {
+        while let Ok((path, info)) = self.git_rx.try_recv() {
+            self.git_pending.remove(&path);
+            self.git_cache.insert(path, (info, Instant::now()));
+        }
+        let path = self.tabs[self.active].path.clone();
+        if crate::tab::is_virtual(&path) || !path.is_dir() {
+            return None;
+        }
+        let cached = self.git_cache.get(&path).cloned();
+        if let Some((info, at)) = &cached {
+            if at.elapsed() < Duration::from_secs(5) {
+                return info.clone();
+            }
+        }
+        if !self.git_pending.contains(&path) {
+            self.git_pending.insert(path.clone());
+            let tx = self.git_tx.clone();
+            let p = path.clone();
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                let info = crate::git::read(&p).map(Arc::new);
+                let _ = tx.send((p, info));
+                ctx.request_repaint();
+            });
+        }
+        cached.and_then(|(i, _)| i)
     }
 
     /// Yapıştırma/bırakma: çakışma varsa sor, yoksa başlat.
@@ -3109,6 +3159,11 @@ impl App {
                 self.save_config();
             }
             Action::ForgetFolderView => self.forget_folder_view(),
+            Action::ToggleGitColumn => {
+                self.git_column = !self.git_column;
+                self.mark_views_dirty();
+                self.save_config();
+            }
             Action::ToggleDefaultFm => {
                 let target = !self.default_fm.unwrap_or_else(win::is_default_file_manager);
                 let before =
@@ -5222,6 +5277,13 @@ impl App {
         row.enabled = !crate::tab::is_virtual(&self.tabs[self.active].path);
         show.children.push(row);
         let id = acts.len() as u32;
+        acts.push(Action::ToggleGitColumn);
+        show.children.push(
+            Node::new(crate::i18n::t("Git sütununu göster"))
+                .with_cmd(Cmd::App(id))
+                .checked(self.git_column),
+        );
+        let id = acts.len() as u32;
         acts.push(Action::ToggleDefaultFm);
         let mut row = Node::new(crate::i18n::t("Varsayılan dosya gezgini olarak kullan"))
             .with_cmd(Cmd::App(id));
@@ -5738,6 +5800,8 @@ impl App {
     }
 
     fn details_view(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        // Depo bilgisi (varsa) satırlarda ve sütunda kullanılır; arka planda tazelenir.
+        let git = self.git_snapshot(ui.ctx());
         let App {
             tabs,
             active,
@@ -5752,6 +5816,7 @@ impl App {
             asc,
             item_rects,
             remember_views,
+            git_column,
             ..
         } = self;
         let (sort, asc, show_ext, accent) = (*sort, *asc, *show_ext, *accent);
@@ -5796,14 +5861,18 @@ impl App {
             .clamp(110.0, (table_w * 0.24).max(130.0));
         let w_size = (px("000,00 MB").max(head(crate::i18n::t("Boyut"))) + pad).clamp(80.0, 170.0);
         let w_type_max = px("Microsoft Edge PDF Document").max(head(crate::i18n::t("Tür"))) + pad;
-        let gaps = gap * (2.0 + show_type as i32 as f32 + in_search as i32 as f32);
+        let show_git = *git_column;
+        let w_git = (px("main ↑12").max(head(crate::i18n::t("Git"))) + pad).clamp(64.0, 150.0);
+        let gaps = gap
+            * (2.0 + show_type as i32 as f32 + in_search as i32 as f32 + show_git as i32 as f32);
         let loc_w = if in_search { w_loc } else { 0.0 };
+        let git_w = if show_git { w_git } else { 0.0 };
         // Ad sütunu önceliklidir (Explorer'da da öyle): tablonun ~%42'si. Tür sütunu
         // içeriğine sığdığı kadar yer alır, artan yer ada geri döner.
         let mut w_name = (table_w * 0.42).clamp(220.0, 900.0);
-        let w_type =
-            (table_w - w_name - w_date - w_size - loc_w - gaps).clamp(110.0, w_type_max.max(110.0));
-        w_name = (table_w - w_type - w_date - w_size - loc_w - gaps).clamp(180.0, 900.0);
+        let w_type = (table_w - w_name - w_date - w_size - loc_w - git_w - gaps)
+            .clamp(110.0, w_type_max.max(110.0));
+        w_name = (table_w - w_type - w_date - w_size - loc_w - git_w - gaps).clamp(180.0, 900.0);
 
         // İlk karede panel genişliği henüz oturmamış olur (yan paneller çizilmemiş);
         // sütun genişlikleri o karede oluşursa çarpık değerler kalıcılaşır. Bu yüzden
@@ -5813,16 +5882,17 @@ impl App {
             "details_cols_boot"
         } else if *remember_views {
             // Her klasör kendi sütun genişliklerini hatırlar: egui_extras durumu bu
-            // anahtarın altında tutar (bkz. Config.folder_views).
+            // anahtarın altında tutar (bkz. Config.folder_views). Git sütunu açık/kapalı
+            // farklı sütun sayısı demek; ayrı anahtar kullanılır.
             match Self::folder_key(&t.path) {
                 Some(k) => {
-                    per_folder = format!("details_cols_v3:{k}");
+                    per_folder = format!("details_cols_v4:{k}:{}", show_git as u8);
                     &per_folder
                 }
-                None => "details_cols_v3",
+                None => "details_cols_v4",
             }
         } else {
-            "details_cols_v3"
+            "details_cols_v4"
         };
         // egui_extras, her sütun ayırıcısını tablo boyunca ince bir çizgiyle gösteriyor;
         // Explorer sütun çizgisi çizmez (yalnızca üzerine gelince imleç değişir).
@@ -5851,6 +5921,16 @@ impl App {
                     .resizable(true)
                     .clip(true),
             );
+        if show_git {
+            // Git durumu adın hemen yanında: Explorer'ın Boyut sütunu sağ kenarda kalır.
+            table = table.column(
+                Column::initial(w_git)
+                    .at_least(56.0)
+                    .at_most(180.0)
+                    .resizable(true)
+                    .clip(true),
+            );
+        }
         if in_search {
             table = table.column(
                 Column::initial(w_loc)
@@ -5952,6 +6032,9 @@ impl App {
                     head_cells.push(rect);
                 };
                 head(&mut h, crate::i18n::t("Ad"), Some(SortKey::Name), false);
+                if show_git {
+                    head(&mut h, crate::i18n::t("Git"), None, false);
+                }
                 if in_search {
                     head(&mut h, crate::i18n::t("Klasör"), None, false);
                 }
@@ -6075,6 +6158,25 @@ impl App {
                             }
                         }
                     });
+                    if show_git {
+                        row.col(|ui| {
+                            let label = match &git {
+                                Some(g) if e.is_dir && e.path == g.root => g.branch.clone(),
+                                Some(g) => g
+                                    .file_state(&e.path)
+                                    .map(|c| c.to_string())
+                                    .unwrap_or_default(),
+                                None => String::new(),
+                            };
+                            if !label.is_empty() {
+                                // Dal adı vurgu renginde, dosya harfleri soluk.
+                                let color = if e.is_dir { focus_line } else { weak };
+                                ui.add(
+                                    egui::Label::new(RichText::new(label).color(color)).truncate(),
+                                );
+                            }
+                        });
+                    }
                     if in_search {
                         row.col(|ui| {
                             let loc = e
@@ -6745,6 +6847,8 @@ impl App {
 
     fn status_bar(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         let p = pal_of(ui);
+        // Git rozeti: depo bilgisi arka planda tazelenir (5 sn TTL)
+        let git = self.git_snapshot(ui.ctx());
         ui.horizontal(|ui| {
             ui.set_min_height(23.0);
             ui.spacing_mut().item_spacing.x = 8.0;
@@ -6859,6 +6963,27 @@ impl App {
                     .clicked()
                 {
                     actions.push(Action::SetView(0));
+                }
+                // Git rozeti: dal, kirli işaretçi, ileri/geri
+                if let Some(g) = &git {
+                    let mut label = format!(" {} ", g.branch);
+                    if g.dirty {
+                        label.push('●');
+                    }
+                    if g.ahead > 0 {
+                        label.push_str(&format!(" ↑{}", g.ahead));
+                    }
+                    if g.behind > 0 {
+                        label.push_str(&format!(" ↓{}", g.behind));
+                    }
+                    let resp = ui.add(
+                        egui::Button::new(RichText::new(label).size(text_size(12.0)).color(p.weak))
+                            .frame(false),
+                    );
+                    if resp.clicked() {
+                        ui.ctx().copy_text(g.branch.clone());
+                    }
+                    resp.on_hover_text(g.root.display().to_string());
                 }
             });
         });

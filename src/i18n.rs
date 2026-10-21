@@ -558,6 +558,8 @@ static TABLE: &[(&str, &str)] = &[
     ("Bu klasör", "This folder"),
     ("Alt klasörler dahil", "Including subfolders"),
     ("Filtreyi kaldır", "Remove filter"),
+    ("Git", "Git"),
+    ("Git sütununu göster", "Show Git column"),
 ];
 
 #[cfg(test)]

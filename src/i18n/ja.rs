@@ -356,4 +356,6 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Bu klasör", "このフォルダー"),
     ("Alt klasörler dahil", "サブフォルダーを含む"),
     ("Filtreyi kaldır", "フィルターを解除"),
+    ("Git", "Git"),
+    ("Git sütununu göster", "Git 列を表示"),
 ];

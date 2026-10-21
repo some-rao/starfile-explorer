@@ -356,4 +356,6 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Bu klasör", "此文件夹"),
     ("Alt klasörler dahil", "包括子文件夹"),
     ("Filtreyi kaldır", "移除筛选"),
+    ("Git", "Git"),
+    ("Git sütununu göster", "显示 Git 列"),
 ];

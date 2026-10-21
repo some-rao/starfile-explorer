@@ -4,6 +4,7 @@ mod app;
 #[cfg(not(windows))]
 mod desktop_apps;
 mod fsutil;
+mod git;
 mod i18n;
 mod images;
 mod menu;
