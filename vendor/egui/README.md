@@ -67,3 +67,9 @@ Patching `src/input_state/mod.rs`:
 
 Real wheel notches and Ctrl+wheel zoom are untouched.
 
+### 4. Momentum read-out for the app's diagnostics (`src/input_state/mod.rs`)
+
+`InputState::pan_momentum()` exposes the pan velocity and the not-yet-applied
+backlog to the app. It is read only by the `SWIFT_EXPLORER_WHEELLOG` frame
+logger (`src/app.rs::perf_log`); no behaviour depends on it.
+

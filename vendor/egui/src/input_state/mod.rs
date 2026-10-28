@@ -585,6 +585,14 @@ impl InputState {
         (self.time - self.last_scroll_time) as f32
     }
 
+    /// Swift Explorer patch: touchpad pan momentum, read by the app's scroll
+    /// diagnostics (`SWIFT_EXPLORER_WHEELLOG`). Returns
+    /// `(velocity, un-applied backlog)` in points and points per second.
+    #[inline]
+    pub fn pan_momentum(&self) -> (Vec2, Vec2) {
+        (self.pan_velocity, self.pan_pending)
+    }
+
     /// The [`crate::Context`] will call this at the end of each frame to see if we need a repaint.
     ///
     /// Returns how long to wait for a repaint.
