@@ -3,6 +3,7 @@
 mod app;
 #[cfg(not(windows))]
 mod desktop_apps;
+mod docview;
 mod fsutil;
 mod git;
 mod highlight;

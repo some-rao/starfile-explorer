@@ -446,6 +446,13 @@ Known asymmetries (do not "fix" by assuming symmetry): `open_terminal` returns `
   cell text keeps Name/Date/Type left and Size right. The table id is salted with a `_boot` variant for the
   first passes because side-panel widths are not known on frame 0 — creating the column state there would
   freeze bogus widths (`details_view`, `app.rs:5300-5400`).
+- **egui ids in split view**: a child `Ui` created by `allocate_ui_with_layout` / `new_child` gets the
+  parent's `id` (only `unique_id` differs), so two panes drawing the same widgets collide. The default
+  `ScrollArea` then resolves to one id for both panes - they share a scroll offset and egui paints its red
+  "ID clash" frames. Each pane body is wrapped in `ui.push_id(("pane", pane))`, every view/panel scroll area
+  carries an explicit `id_salt`, and per-pane scroll memory lives in `App.grid_scroll[pane]`. Regression
+  tests `split_panes_have_independent_scroll_areas` / `split_panes_draw_without_id_clashes` (`app.rs`) fail
+  if the push_id or a salt is removed.
 - **Restored window guard**: `App::repair_restored_window` (`app.rs:1830-1870`) un-minimizes/centres a
   stored window that is off-screen, maximized oddly or shrunk below 700×420, and `App::save` rewrites the
   last good `"window"` entry instead of persisting a minimized rect. `good_window` ignores `-32000`

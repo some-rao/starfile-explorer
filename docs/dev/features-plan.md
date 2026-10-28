@@ -518,8 +518,9 @@ New i18n keys: `Klasör içeriği`, `Yol`, `Önizleme hazırlanıyor…`,
   state, and `Ctrl+Tab` / close-last-tab act on the focused pane only.
 - **Quick Look** renders Markdown and highlighted text itself instead of only
   delegating to PowerToys Peek; Peek remains selectable in the View menu.
-- Markdown tables/lists/headings are rendered; images, footnotes and inline
-  emphasis are shown as text. Links are not clickable yet.
+- Markdown tables/lists/headings are rendered; images and footnotes are shown as
+  text, links are not clickable. Inline emphasis/code/links are drawn as runs of
+  a single `LayoutJob` (see "Post-review fixes 2").
 - Git column sits right after **Name** so the Size column keeps the right edge.
 
 ## Verification checklist (manual)
@@ -550,8 +551,47 @@ New i18n keys: `Klasör içeriği`, `Yol`, `Önizleme hazırlanıyor…`,
 8. **Quick Look** — Space opens it over the list, Space again closes it; Esc and
    the window's ✕ also close it; ←/→ move through the folder while it is open;
    PDF/video/audio play inside the overlay.
-9. **Columns** — in Details view drag the *Değiştirme tarihi* / *Tür* / *Boyut*
+9. **Columns** - in Details view drag the *Değiştirme tarihi* / *Tür* / *Boyut*
    headings: values start at the left edge of each column, the *Name* column is
-   only as wide as the longest visible name (220–460 px) and Date/Type/Size
+   only as wide as the longest visible name (220-460 px) and Date/Type/Size
    follow immediately after it.
+
+---
+
+## Post-review fixes 2 (six-item review)
+
+Raised by the user after preview v2 and the first split-view fix.
+
+| # | Report | Cause | Fix |
+|---|---|---|---|
+| 1 | Red lines inside a **Markdown** preview in Quick Look | every fenced code block created `ScrollArea::both()` with the *default* salt, so two blocks in one document shared one id; same for `Grid::new(("md_table", counter))` | each code block salts with `ui.next_auto_id().with("md_code")`, tables with `ui.next_auto_id().with("md_table")` |
+| 2 | Red lines in **split view** *and* scrolling one pane scrolled the other | egui gives sibling child `Ui`s the **same** `ui.id()` (only `unique_id` differs). Both pane bodies therefore shared every `ui.id()`-derived id — including the default `ScrollArea` id — so they also shared one scroll offset | `ui.push_id(("pane", pane))` wraps each pane body; `grid_scroll` is now `[(f32, f32); 2]` (per pane); every view/panel `ScrollArea` has an explicit `id_salt` (`nav_scroll`, `home_scroll`, `pc_scroll`, `grid_scroll`, `preview_scroll`, `details_scroll`, `help_scroll`, `addr_suggest_scroll`, `pv_scroll` + surface) |
+| 3 | Quick Look "so basic"; audio player "looks so bad", must autoplay, kept playing after closing | plain `Window` with a raw `<audio controls>`; WebView2 needs the autoplay flag; nothing paused the element on hide | dim backdrop + rounded card with a real header; `player.html` rebuilt (album tile, seek bar with hover knob, time labels, play/pause, volume, speed; video keeps native controls but autoplays); `--autoplay-policy=no-user-gesture-required`; `pause()` script runs whenever the child window hides |
+| 4 | Split-view button next to *Sırala* / *Görünüm*; ✕ in the pane's top-right corner | — | painted two-panel toggle in the command bar (accent when active); ✕ is an overlay hit-test at the right pane's top-right, drawn last so it wins clicks |
+| 5 | *Aç* / *Birlikte aç…* in the Quick Look header; **no** file details there for images/PDF/… | details card was drawn for every surface | buttons moved into the header (window), removed from the body on the overlay surface; metadata only for folders, archives/binaries and failures |
+| 6 | Word / Excel / PowerPoint / Markdown previews "not that great" | Office was a monospaced text dump; Markdown flattened inline runs | `ooxml::Doc { Text(Vec<Block>), Sheets, Slides }` (headings, paragraphs, bullets, tables; per-sheet grid; slide cards) rendered by the new `src/docview.rs`; Markdown paragraphs are one `LayoutJob` with accent for strong, italics, inline-code background, underlined links; header rows in accent colour |
+
+Also: `WebView2` `AcceleratorKeyPressed` now forwards **Boşluk** / **Esc** to the
+app (`WebView::take_keys`), so the preview can be closed while the player has
+keyboard focus — previously those keys died inside the child window.
+
+### Verification (round 3)
+
+1. **Markdown** - open a `.md` with **two or more fenced code blocks** (e.g.
+   `README.md` or any doc with ``` blocks) in Quick Look: no red frame, both
+   blocks scroll on their own.
+2. **Split view** - `Ctrl+\` (or the new toolbar button); scroll the left pane,
+   the right pane must not move; no red frames; ✕ in the top-right of the right
+   pane closes the split (and the toolbar toggle un-presses).
+3. **Audio** - Space on an `.mp3`: it starts **playing immediately** without
+   pressing play; with the player focused press Space - the preview closes and
+   the sound stops. Same for Esc, ✕, and clicking the dimmed background.
+4. **Quick Look chrome** - header shows icon, name, type · size, then *Aç*,
+   *Birlikte aç…*, ✕; an image/PDF shows only content (no details card); a `.zip`
+   or `.exe` shows the details card.
+5. **Office** - `.docx` with headings/lists/table shows them as such; `.xlsx`
+   shows sheet name, row numbers and a highlighted first row; `.pptx` shows one
+   card per slide; `.md` shows **accent** bold, italic, inline code chips and
+   underlined links.
+
 

@@ -4,9 +4,9 @@
 //! Gezgini'nde Markdown önizlemesi yok; bu bölme "okunabilir" olmayı hedefler:
 //! başlıklar, listeler, alıntılar, tablolar ve (varsa dili tanınan) kod blokları
 //! renklendirilir. Kalın yazı kullanılmaz — proje kuralı gereği vurgu renkle
-//! yapılır.
-
-use std::sync::atomic::{AtomicU64, Ordering};
+//! yapılır. Satır içi biçimler (`**kalın**`, `*eğik*`, `` `kod` ``, bağlantı,
+//! üstü çizili) tek bir `LayoutJob` içinde çizilir; böylece karışık satırlar
+//! düz metne indirgenmez.
 
 use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
 
@@ -17,7 +17,15 @@ pub struct Md {
     pub size: f32,
 }
 
-static TABLE_NO: AtomicU64 = AtomicU64::new(0);
+/// Satır içi biçim yığını (iç içe `**` / `*` / `~~` sayılır).
+#[derive(Default, Clone, Copy)]
+struct Inline {
+    strong: u32,
+    emph: u32,
+    strike: u32,
+    link: bool,
+    code: bool,
+}
 
 pub fn render(ui: &mut egui::Ui, src: &str, md: &Md) {
     let mut opts = Options::empty();
@@ -25,8 +33,10 @@ pub fn render(ui: &mut egui::Ui, src: &str, md: &Md) {
     opts.insert(Options::ENABLE_STRIKETHROUGH);
     opts.insert(Options::ENABLE_TASKLISTS);
 
-    let mut buf = String::new();
+    let mut job = egui::text::LayoutJob::default();
+    let mut inline = Inline::default();
     let mut heading: Option<u8> = None;
+    let mut cur_size = md.size;
     let mut lists: Vec<Option<u64>> = Vec::new();
     let mut counters: Vec<u64> = Vec::new();
     let mut marker: Option<String> = None;
@@ -40,31 +50,29 @@ pub fn render(ui: &mut egui::Ui, src: &str, md: &Md) {
         match ev {
             Event::Start(Tag::Heading { level, .. }) => {
                 heading = Some(level as u8);
-                buf.clear();
+                cur_size = match level as u8 {
+                    1 => md.size * 1.6,
+                    2 => md.size * 1.34,
+                    3 => md.size * 1.16,
+                    _ => md.size * 1.04,
+                };
+                job = egui::text::LayoutJob::default();
             }
             Event::End(TagEnd::Heading(_)) => {
                 let lvl = heading.take().unwrap_or(1);
-                let t = buf.trim().to_string();
-                buf.clear();
-                if !t.is_empty() {
-                    let size = match lvl {
-                        1 => md.size * 1.6,
-                        2 => md.size * 1.34,
-                        3 => md.size * 1.16,
-                        _ => md.size * 1.04,
-                    };
-                    ui.add_space(10.0);
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(t).size(size).color(md.c.text)).wrap(),
-                    );
-                    ui.add_space(2.0);
+                cur_size = md.size;
+                if !job.text.trim().is_empty() {
+                    ui.add_space(if lvl <= 2 { 12.0 } else { 8.0 });
+                    ui.add(egui::Label::new(job.clone()).wrap());
+                    ui.add_space(3.0);
                 }
+                job = egui::text::LayoutJob::default();
             }
-            Event::Start(Tag::Paragraph) => buf.clear(),
+            Event::Start(Tag::Paragraph) => job = egui::text::LayoutJob::default(),
             Event::End(TagEnd::Paragraph) => {
                 let m = marker.take().unwrap_or_default();
-                para(ui, md, &buf, &m, lists.len(), quote);
-                buf.clear();
+                let j = std::mem::take(&mut job);
+                para(ui, md, j, &m, lists.len(), quote);
             }
             Event::Start(Tag::BlockQuote(_)) => {
                 quote += 1;
@@ -93,10 +101,10 @@ pub fn render(ui: &mut egui::Ui, src: &str, md: &Md) {
             }
             Event::End(TagEnd::Item) => {
                 // Sıkı listelerde paragraf olayı gelmez; madde işareti burada harcanır.
-                if !buf.trim().is_empty() {
+                if !job.text.trim().is_empty() {
                     let m = marker.take().unwrap_or_default();
-                    para(ui, md, &buf, &m, lists.len(), quote);
-                    buf.clear();
+                    let j = std::mem::take(&mut job);
+                    para(ui, md, j, &m, lists.len(), quote);
                 }
                 marker = None;
             }
@@ -116,6 +124,10 @@ pub fn render(ui: &mut egui::Ui, src: &str, md: &Md) {
                         .inner_margin(8)
                         .show(ui, |ui| {
                             egui::ScrollArea::both()
+                                // Aynı önizlemede iki kod bloğu olabilir: her blok
+                                // kendi kaydırma kimliğini almalı (yoksa egui
+                                // "ID clash" uyarısıyla kırmızı çerçeve çizer).
+                                .id_salt(ui.next_auto_id().with("md_code"))
                                 .max_height(360.0)
                                 .auto_shrink([false, true])
                                 .show(ui, |ui| {
@@ -142,15 +154,15 @@ pub fn render(ui: &mut egui::Ui, src: &str, md: &Md) {
             }
             Event::End(TagEnd::Table) => {
                 if !rows.is_empty() {
-                    let id = TABLE_NO.fetch_add(1, Ordering::Relaxed);
                     ui.add_space(6.0);
-                    egui::Grid::new(("md_table", id))
+                    let id = ui.next_auto_id().with("md_table");
+                    egui::Grid::new(id)
                         .striped(true)
                         .spacing([16.0, 6.0])
                         .show(ui, |ui| {
                             for (i, r) in rows.iter().enumerate() {
                                 for c in r {
-                                    let color = if i == 0 { md.c.weak } else { md.c.text };
+                                    let color = if i == 0 { md.c.accent } else { md.c.text };
                                     ui.add(
                                         egui::Label::new(
                                             egui::RichText::new(c).size(md.size).color(color),
@@ -165,13 +177,20 @@ pub fn render(ui: &mut egui::Ui, src: &str, md: &Md) {
                 }
                 rows.clear();
             }
+            Event::Start(Tag::Strong) => inline.strong += 1,
+            Event::End(TagEnd::Strong) => inline.strong = inline.strong.saturating_sub(1),
+            Event::Start(Tag::Emphasis) => inline.emph += 1,
+            Event::End(TagEnd::Emphasis) => inline.emph = inline.emph.saturating_sub(1),
+            Event::Start(Tag::Strikethrough) => inline.strike += 1,
+            Event::End(TagEnd::Strikethrough) => inline.strike = inline.strike.saturating_sub(1),
             Event::Text(t) => {
                 if let Some((_, s)) = &mut code {
                     s.push_str(&t);
                 } else if let Some(c) = &mut cell {
                     c.push_str(&t);
                 } else {
-                    buf.push_str(&t);
+                    let f = run_format(&inline, md, cur_size, quote > 0);
+                    job.append(&t, 0.0, f);
                 }
             }
             Event::Code(t) => {
@@ -180,46 +199,97 @@ pub fn render(ui: &mut egui::Ui, src: &str, md: &Md) {
                 } else if let Some(c) = &mut cell {
                     c.push_str(&t);
                 } else {
-                    buf.push_str(&t);
+                    let mut inl = inline;
+                    inl.code = true;
+                    let f = run_format(&inl, md, cur_size, quote > 0);
+                    job.append(&t, 0.0, f);
                 }
             }
             Event::TaskListMarker(checked) => {
                 marker = Some(if checked { "☑" } else { "☐" }.to_string());
             }
-            Event::SoftBreak => buf.push(' '),
-            Event::HardBreak => buf.push('\n'),
+            Event::SoftBreak => {
+                // Yumuşak satır sonu tek boşluk olarak akar; biçim korunur.
+                let f = run_format(&inline, md, cur_size, quote > 0);
+                job.append(" ", 0.0, f);
+            }
+            Event::HardBreak => {
+                let f = run_format(&inline, md, cur_size, quote > 0);
+                job.append("\n", 0.0, f);
+            }
             Event::Rule => {
                 ui.add_space(6.0);
                 ui.separator();
                 ui.add_space(6.0);
             }
-            Event::Start(Tag::Link { dest_url, .. }) => {
-                // Bağlantı metni düz yazı olarak akar; hedef sonunda köşeli parantezle
-                // gösterilir ki okuyucu nereye gittiğini görsün.
-                let _ = &dest_url;
-            }
-            Event::End(TagEnd::Link) => {}
-            Event::Start(Tag::Image { .. }) => buf.push_str("[görsel] "),
+            Event::Start(Tag::Link { .. }) => inline.link = true,
+            Event::End(TagEnd::Link) => inline.link = false,
+            Event::Start(Tag::Image { .. }) => job.append(
+                "[görsel] ",
+                0.0,
+                run_format(&inline, md, cur_size, quote > 0),
+            ),
             Event::FootnoteReference(name) => {
-                buf.push('[');
-                buf.push_str(&name);
-                buf.push(']');
+                let f = run_format(&inline, md, cur_size, quote > 0);
+                job.append("[", 0.0, f.clone());
+                job.append(&name, 0.0, f.clone());
+                job.append("]", 0.0, f);
             }
             _ => {}
         }
     }
-    if !buf.trim().is_empty() {
-        para(ui, md, &buf, "", lists.len(), quote);
+    if !job.text.trim().is_empty() {
+        para(ui, md, job, "", lists.len(), quote);
     }
 }
 
-fn para(ui: &mut egui::Ui, md: &Md, text: &str, marker: &str, depth: usize, quote: usize) {
-    let t = text.trim();
-    if t.is_empty() {
+/// Satır içi biçim: kalın yerine vurgu rengi, eğik yazı, satır içi kod arka planı.
+fn run_format(inl: &Inline, md: &Md, size: f32, quote: bool) -> egui::TextFormat {
+    let mut f = egui::TextFormat {
+        font_id: egui::FontId::proportional(size),
+        color: if quote { md.c.weak } else { md.c.text },
+        ..Default::default()
+    };
+    if inl.code {
+        f.font_id = egui::FontId::monospace((size - 1.0).max(9.0));
+        f.color = md.c.accent;
+        f.background = if md.c.dark {
+            egui::Color32::from_white_alpha(18)
+        } else {
+            egui::Color32::from_black_alpha(14)
+        };
+    }
+    if inl.emph > 0 {
+        f.italics = true;
+    }
+    if inl.strike > 0 {
+        f.strikethrough = egui::Stroke::new(1.0_f32, md.c.weak);
+    }
+    if inl.link {
+        f.color = md.c.accent;
+        f.underline = egui::Stroke::new(1.0_f32, md.c.accent);
+    }
+    if inl.strong > 0 && !inl.code && !inl.link {
+        // Proje kuralı: kalın yazı yok; vurgu renkle yapılır.
+        f.color = md.c.accent;
+    }
+    f
+}
+
+fn para(
+    ui: &mut egui::Ui,
+    md: &Md,
+    mut job: egui::text::LayoutJob,
+    marker: &str,
+    depth: usize,
+    quote: usize,
+) {
+    if job.text.trim().is_empty() {
         return;
     }
-    let indent = 16.0 * (depth + quote) as f32;
-    ui.horizontal(|ui| {
+    job.wrap.max_width = f32::INFINITY;
+    let indent = 16.0 * (depth.saturating_sub(1) + quote) as f32;
+    ui.horizontal_top(|ui| {
         ui.add_space(indent);
         if !marker.is_empty() {
             ui.add(
@@ -228,12 +298,7 @@ fn para(ui: &mut egui::Ui, md: &Md, text: &str, marker: &str, depth: usize, quot
             );
             ui.add_space(4.0);
         }
-        let color = if quote > 0 { md.c.weak } else { md.c.text };
-        ui.add(
-            egui::Label::new(egui::RichText::new(t).size(md.size).color(color))
-                .wrap()
-                .selectable(true),
-        );
+        ui.add(egui::Label::new(job).wrap().selectable(true));
     });
     ui.add_space(3.0);
 }

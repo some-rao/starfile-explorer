@@ -9,6 +9,16 @@ pub struct Want {
     pub kind: crate::media::MediaKind,
     pub rect: egui::Rect,
     pub overlay: bool,
+    pub dark: bool,
+    pub accent: String,
+}
+
+/// Windows tarafında oynatıcıdan iletilen tuşlar; burada yok.
+#[allow(dead_code)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HotKey {
+    Space,
+    Escape,
 }
 
 pub struct WebView;
@@ -24,6 +34,10 @@ impl WebView {
 
     pub fn failed(&self) -> bool {
         true
+    }
+
+    pub fn take_keys(&self) -> Vec<HotKey> {
+        Vec::new()
     }
 
     pub fn sync(

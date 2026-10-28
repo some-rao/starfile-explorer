@@ -5,27 +5,245 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Swift Explorer</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #1b1b1b; overflow: hidden; }
+  :root {
+    --accent: #0078d4;
+    --bg: #f3f3f3;
+    --card: #ffffff;
+    --line: rgba(0, 0, 0, .09);
+    --text: #1b1b1b;
+    --weak: #5f5f5f;
+    --hover: rgba(0, 0, 0, .05);
+    --shadow: 0 2px 10px rgba(0, 0, 0, .12);
+  }
+  html[data-theme="dark"] {
+    --bg: #202020;
+    --card: #2b2b2b;
+    --line: rgba(255, 255, 255, .10);
+    --text: #f3f3f3;
+    --weak: #b4b4b4;
+    --hover: rgba(255, 255, 255, .07);
+    --shadow: 0 2px 12px rgba(0, 0, 0, .45);
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.4 "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    user-select: none;
+  }
+  /* ---- video ------------------------------------------------------- */
+  body.video { background: #000; }
   video { width: 100%; height: 100%; object-fit: contain; background: #000; display: block; }
-  audio { width: 92%; display: block; margin: 0 auto; }
+
+  /* ---- audio ------------------------------------------------------- */
   body.audio { display: flex; align-items: center; justify-content: center; }
+  .card {
+    width: min(560px, calc(100% - 24px));
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+    padding: 16px 18px 14px;
+    display: grid;
+    grid-template-columns: 64px 1fr;
+    grid-template-rows: auto auto auto;
+    column-gap: 14px;
+    row-gap: 10px;
+  }
+  .art {
+    grid-row: 1 / span 2;
+    width: 64px; height: 64px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(135deg, var(--accent) 0%, rgba(255,255,255,.08) 140%);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.18);
+  }
+  .art svg { width: 30px; height: 30px; fill: #fff; opacity: .95; }
+  .meta { min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+  .name {
+    font-size: 15px; font-weight: 400; color: var(--text);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .sub { font-size: 12px; color: var(--weak); margin-top: 2px; }
+
+  .bar {
+    grid-column: 1 / span 2;
+    position: relative; height: 16px; display: flex; align-items: center;
+    cursor: pointer; touch-action: none;
+  }
+  .track {
+    position: absolute; left: 0; right: 0; height: 4px; border-radius: 2px;
+    background: var(--hover);
+  }
+  .fill {
+    position: absolute; left: 0; height: 4px; border-radius: 2px; width: 0;
+    background: var(--accent);
+  }
+  .knob {
+    position: absolute; width: 12px; height: 12px; border-radius: 50%;
+    background: var(--accent); left: 0; transform: translateX(-50%);
+    box-shadow: 0 1px 3px rgba(0,0,0,.3); opacity: 0; transition: opacity .12s;
+  }
+  .bar:hover .knob, .bar.drag .knob { opacity: 1; }
+  .times {
+    grid-column: 1 / span 2;
+    display: flex; justify-content: space-between;
+    font-size: 11px; color: var(--weak); margin-top: -8px;
+    font-variant-numeric: tabular-nums;
+  }
+  .row {
+    grid-column: 1 / span 2;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .play {
+    width: 36px; height: 36px; border-radius: 18px; border: 0;
+    background: var(--accent); color: #fff; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    padding: 0; flex: 0 0 auto;
+  }
+  .play:hover { filter: brightness(1.08); }
+  .play:active { transform: scale(.96); }
+  .play svg { width: 16px; height: 16px; fill: #fff; }
+  .vol { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+  .vol svg { width: 16px; height: 16px; fill: var(--weak); flex: 0 0 auto; }
+  input[type="range"] {
+    width: 96px; accent-color: var(--accent); cursor: pointer;
+  }
+  .rate {
+    border: 1px solid var(--line); background: transparent; color: var(--text);
+    border-radius: 6px; height: 26px; padding: 0 8px; font: inherit; font-size: 12px;
+    cursor: pointer;
+  }
+  .rate:hover { background: var(--hover); }
+  .msg { color: var(--weak); font-size: 12px; }
 </style>
 </head>
 <body>
-<video id="v" controls autoplay playsinline></video>
 <script>
   const q = new URLSearchParams(location.search);
   const src = q.get('src') || '';
   const kind = q.get('kind') || 'video';
+  const theme = q.get('theme') || 'light';
+  const accent = q.get('accent') || '#0078d4';
+  const name = q.get('name') || '';
+  document.documentElement.dataset.theme = theme;
+  document.documentElement.style.setProperty('--accent', accent);
+
+  const ICON_PLAY = '<svg viewBox="0 0 16 16"><path d="M4 2.5v11l9-5.5-9-5.5z"/></svg>';
+  const ICON_PAUSE = '<svg viewBox="0 0 16 16"><path d="M3.5 2.5h3v11h-3zM9.5 2.5h3v11h-3z"/></svg>';
+  const ICON_VOL = '<svg viewBox="0 0 16 16"><path d="M2 6h2.2L8 3v10L4.2 10H2zM10 5.2a4 4 0 0 1 0 5.6l.9.9a5.3 5.3 0 0 0 0-7.4z"/></svg>';
+  const ICON_NOTE = '<svg viewBox="0 0 24 24"><path d="M9 19a2.5 2.5 0 1 1-1.6-2.34V5.5l9-2v9.4a2.5 2.5 0 1 1-1.6-2.34V6.1L9 7.6z"/></svg>';
+
+  function fmt(s) {
+    if (!isFinite(s) || s < 0) s = 0;
+    s = Math.floor(s);
+    const m = Math.floor(s / 60), r = s % 60;
+    return m + ':' + String(r).padStart(2, '0');
+  }
+
   if (kind === 'audio') {
-    document.body.classList.add('audio');
-    const a = document.createElement('audio');
-    a.controls = true;
-    a.autoplay = true;
+    document.body.className = 'audio';
+    document.body.innerHTML = `
+      <div class="card">
+        <div class="art">${ICON_NOTE}</div>
+        <div class="meta">
+          <div class="name" title=""></div>
+          <div class="sub">Ses dosyası</div>
+        </div>
+        <div class="bar" id="bar">
+          <div class="track"></div>
+          <div class="fill" id="fill"></div>
+          <div class="knob" id="knob"></div>
+        </div>
+        <div class="times"><span id="cur">0:00</span><span id="dur">0:00</span></div>
+        <div class="row">
+          <button class="play" id="play" title="Çal / duraklat">${ICON_PLAY}</button>
+          <span class="msg" id="msg"></span>
+          <div class="vol">${ICON_VOL}<input type="range" id="vol" min="0" max="1" step="0.01" value="1"></div>
+          <button class="rate" id="rate" title="Oynatma hızı">1×</button>
+        </div>
+      </div>
+      <audio id="a" preload="auto" autoplay></audio>`;
+    const a = document.getElementById('a');
+    const play = document.getElementById('play');
+    const fill = document.getElementById('fill');
+    const knob = document.getElementById('knob');
+    const bar = document.getElementById('bar');
+    const cur = document.getElementById('cur');
+    const dur = document.getElementById('dur');
+    const msg = document.getElementById('msg');
+    const vol = document.getElementById('vol');
+    const rate = document.getElementById('rate');
+    const nameEl = document.querySelector('.name');
+    nameEl.textContent = name || src.split('/').pop() || 'Ses';
+    nameEl.title = nameEl.textContent;
+
+    const rates = [1, 1.25, 1.5, 2, 0.75];
+    let ri = 0;
+
+    function paint() {
+      const d = a.duration || 0;
+      const t = a.currentTime || 0;
+      const p = d > 0 ? (t / d) * 100 : 0;
+      fill.style.width = p + '%';
+      knob.style.left = p + '%';
+      cur.textContent = fmt(t);
+      dur.textContent = fmt(d);
+    }
+    play.onclick = () => { a.paused ? a.play().catch(showErr) : a.pause(); };
+    a.onplay = () => { play.innerHTML = ICON_PAUSE; play.title = 'Duraklat'; };
+    a.onpause = () => { play.innerHTML = ICON_PLAY; play.title = 'Çal'; };
+    a.onloadedmetadata = paint;
+    a.ontimeupdate = paint;
+    a.onended = () => { play.innerHTML = ICON_PLAY; };
+    a.onerror = showErr;
+
+    function showErr() {
+      msg.textContent = 'Bu ses biçimi açılamadı';
+      msg.title = (a.error && a.error.message) || '';
+    }
+
+    function seek(e) {
+      const r = bar.getBoundingClientRect();
+      const p = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
+      if (isFinite(a.duration)) { a.currentTime = p * a.duration; paint(); }
+    }
+    bar.addEventListener('pointerdown', e => {
+      bar.classList.add('drag');
+      bar.setPointerCapture(e.pointerId);
+      seek(e);
+    });
+    bar.addEventListener('pointermove', e => { if (bar.classList.contains('drag')) seek(e); });
+    bar.addEventListener('pointerup', e => {
+      bar.classList.remove('drag');
+      bar.releasePointerCapture(e.pointerId);
+    });
+
+    vol.oninput = () => { a.volume = parseFloat(vol.value); };
+    rate.onclick = () => {
+      ri = (ri + 1) % rates.length;
+      a.playbackRate = rates[ri];
+      rate.textContent = rates[ri] + '×';
+    };
+
+    // Otomatik başlat; tarayıcı izin vermezse ilk tıklamada başlar.
     a.src = src;
-    document.body.replaceChildren(a);
+    a.play().catch(() => { play.innerHTML = ICON_PLAY; });
+    window.addEventListener('keydown', e => {
+      if (e.key === 'ArrowRight') a.currentTime += 5;
+      if (e.key === 'ArrowLeft') a.currentTime -= 5;
+    });
   } else {
-    document.getElementById('v').src = src;
+    document.body.className = 'video';
+    const v = document.createElement('video');
+    v.controls = true;
+    v.autoplay = true;
+    v.playsInline = true;
+    v.preload = 'auto';
+    v.src = src;
+    v.play().catch(() => {});
+    document.body.replaceChildren(v);
   }
 </script>
 </body>

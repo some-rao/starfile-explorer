@@ -620,7 +620,9 @@ pub struct App {
     zoom_acc: f32,
     marquee: Option<Pos2>,
     item_rects: Vec<(usize, Rect)>,
-    grid_scroll: (f32, f32),
+    /// Bölme başına son kaydırma konumu `(offset, görünür yükseklik)`. İki bölme
+    /// aynı alanı paylaşırsa biri kaydırılınca öteki de kayar.
+    grid_scroll: [(f32, f32); 2],
     silent_jobs: Vec<usize>,
     /// Açık modern sağ tık menüsü
     menu: Option<MenuState>,
@@ -1902,7 +1904,7 @@ impl App {
             zoom_acc: 0.0,
             marquee: None,
             item_rects: vec![],
-            grid_scroll: (0.0, 0.0),
+            grid_scroll: [(0.0, 0.0); 2],
             silent_jobs: vec![],
             menu: None,
             saved_config: String::new(),
@@ -2720,6 +2722,17 @@ impl App {
                     }
                 }
             });
+        }
+        // Oynatıcı (WebView2) odaktayken Boşluk/Esc egui'ye ulaşmaz; görüntüleyici
+        // bu tuşları yakalayıp buraya yazar (bkz. `webview::hook_keys`).
+        for k in self.web.take_keys() {
+            if matches!(
+                k,
+                crate::webview::HotKey::Space | crate::webview::HotKey::Escape
+            ) && self.quick.is_some()
+            {
+                self.quick = None;
+            }
         }
         // Boşluk: seçili dosyayı PowerToys Peek ile önizle (Ctrl+Boşluk çoklu seçimdir).
         // Önizleme katmanı açıkken Boşluk onu kapatır (aç/kapa).
@@ -4028,6 +4041,7 @@ impl App {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
                         ui.set_min_width(200.0);
                         egui::ScrollArea::vertical()
+                            .id_salt("addr_suggest_scroll")
                             .max_height(420.0)
                             .show(ui, |ui| {
                                 for (s, label) in items.iter().take(500) {
@@ -4234,6 +4248,46 @@ impl App {
                             in_search: false,
                         },
                     });
+                }
+            }
+            // Bölünmüş görünüm: Sırala/Görünüm'ün hemen yanında, açıkken vurgulu.
+            // Glif yerine iki küçük panel çizilir (Fluent "split" simgesi).
+            {
+                let active = self.split;
+                let (rect, resp) = ui.allocate_exact_size(egui::vec2(40.0, 32.0), Sense::click());
+                if resp.hovered() {
+                    let bg = if resp.is_pointer_button_down_on() {
+                        p.nav_sel
+                    } else {
+                        p.hover
+                    };
+                    ui.painter().rect_filled(rect, 4.0, bg);
+                }
+                let col = if active { self.accent } else { p.text };
+                let c = rect.center();
+                let sz = egui::vec2(8.0, 15.0);
+                let left = egui::Rect::from_center_size(c - egui::vec2(5.5, 0.0), sz);
+                let right = egui::Rect::from_center_size(c + egui::vec2(5.5, 0.0), sz);
+                if active {
+                    ui.painter().rect_filled(
+                        left,
+                        2.0,
+                        Color32::from_rgba_unmultiplied(col.r(), col.g(), col.b(), 70),
+                    );
+                }
+                for r in [left, right] {
+                    ui.painter().rect_stroke(
+                        r,
+                        2.0,
+                        Stroke::new(1.25_f32, col),
+                        egui::StrokeKind::Inside,
+                    );
+                }
+                if resp
+                    .on_hover_text(crate::i18n::t("Bölünmüş görünüm"))
+                    .clicked()
+                {
+                    actions.push(Action::ToggleSplit);
                 }
             }
             sep(ui);
@@ -4525,6 +4579,7 @@ impl App {
             );
         };
         egui::ScrollArea::vertical()
+            .id_salt("nav_scroll")
             .auto_shrink(false)
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = (2.0 * text_factor()).round();
@@ -4742,6 +4797,7 @@ impl App {
         let accent = self.accent;
         let p = pal_of(ui);
         egui::ScrollArea::vertical()
+            .id_salt(("home_scroll", self.pane_no))
             .auto_shrink(false)
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
@@ -4892,6 +4948,7 @@ impl App {
         let accent = self.accent;
         let p = pal_of(ui);
         egui::ScrollArea::vertical()
+            .id_salt(("pc_scroll", self.pane_no))
             .auto_shrink(false)
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
@@ -5700,15 +5757,16 @@ fn ensure_preview(store: &mut Preview, path: &Path, ctx: &egui::Context) {
     });
 }
 
-/// Metin/ofis önizlemesi için çerçeveli kaydırma alanı.
-fn text_frame(ui: &mut egui::Ui, max_h: f32, add: impl FnOnce(&mut egui::Ui)) {
+/// Metin/ofis önizlemesi için çerçeveli kaydırma alanı. `salt` her çağrı yerinin
+/// kimliğini ayırır (aynı karede iki önizleme çizilirse çakışmasın).
+fn text_frame(ui: &mut egui::Ui, max_h: f32, salt: &str, add: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::new()
         .fill(ui.visuals().extreme_bg_color)
         .corner_radius(6.0)
         .inner_margin(8)
         .show(ui, |ui| {
             egui::ScrollArea::both()
-                .id_salt(ui.id().with("pv_scroll"))
+                .id_salt(("pv_scroll", salt))
                 .max_height(max_h)
                 .auto_shrink([false, true])
                 .show(ui, add);
@@ -5887,60 +5945,96 @@ impl App {
                     ui.available_width().max(80.0)
                 };
                 ui.allocate_ui_with_layout(egui::vec2(w, h), Layout::top_down(Align::Min), |ui| {
-                    // Çizilen bölmenin numarası: egui kimlikleri buna göre ayrışır.
-                    self.pane_no = pane;
-                    if pane != focus {
-                        self.swap_panes();
-                    }
-                    if pane != focus {
-                        // Başlık: ikinci bölmenin hangi klasörde olduğunu gösterir
-                        let title = {
-                            let t = &self.tabs[self.active];
-                            path_label(&t.path)
-                        };
-                        let p = pal_of(ui);
-                        ui.add_space(2.0);
-                        ui.horizontal(|ui| {
-                            ui.add_space(6.0);
-                            ui.add(
-                                egui::Label::new(
-                                    RichText::new(title).size(text_size(12.0)).color(p.weak),
-                                )
-                                .truncate(),
-                            );
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if flat_icon(ui, g::CLOSE, egui::vec2(22.0, 22.0), 12.0, true)
-                                    .on_hover_text(crate::i18n::t("Bölünmüş görünümü kapat"))
-                                    .clicked()
-                                {
-                                    actions.push(Action::ToggleSplit);
-                                }
-                            });
-                        });
-                        ui.separator();
-                    }
-                    let ctx = ui.ctx().clone();
-                    self.tabs[self.active].ensure_loaded(&ctx);
-                    if pane == focus {
-                        self.pane_body(ui, actions);
-                    } else {
-                        let mut local = Vec::new();
-                        self.pane_body(ui, &mut local);
-                        let acted = !local.is_empty();
-                        for a in local {
-                            self.apply(a);
+                    // Bölme kimliği: egui kardeş `Ui`'lere **aynı** `ui.id()` verir
+                    // (yalnızca `unique_id` ayrışır). Bu yüzden kaydırma alanı gibi
+                    // `ui.id()`'den türeyen her şey iki bölmede çakışır: aynı kaydırma
+                    // konumu paylaşılır ve hata ayıklamada kırmızı çerçeve çizilir.
+                    // `push_id` bölmenin tüm alt kimliklerini ayırır.
+                    ui.push_id(("pane", pane), |ui| {
+                        // Çizilen bölmenin numarası: kalan kimlikler de buna göre ayrışır.
+                        self.pane_no = pane;
+                        if pane != focus {
+                            self.swap_panes();
                         }
-                        self.swap_panes();
-                        if acted {
+                        if pane != focus {
+                            // Başlık: ikinci bölmenin hangi klasörde olduğunu gösterir
+                            let title = {
+                                let t = &self.tabs[self.active];
+                                path_label(&t.path)
+                            };
+                            let p = pal_of(ui);
+                            ui.add_space(2.0);
+                            ui.horizontal(|ui| {
+                                ui.add_space(6.0);
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(title).size(text_size(12.0)).color(p.weak),
+                                    )
+                                    .truncate(),
+                                );
+                            });
+                            ui.separator();
+                        }
+                        let ctx = ui.ctx().clone();
+                        self.tabs[self.active].ensure_loaded(&ctx);
+                        if pane == focus {
+                            self.pane_body(ui, actions);
+                        } else {
+                            let mut local = Vec::new();
+                            self.pane_body(ui, &mut local);
+                            let acted = !local.is_empty();
+                            for a in local {
+                                self.apply(a);
+                            }
+                            self.swap_panes();
+                            if acted {
+                                new_focus = Some(pane);
+                            }
+                        }
+                        if pane != focus
+                            && ui.rect_contains_pointer(ui.max_rect())
+                            && ui.input(|i| i.pointer.any_click())
+                        {
                             new_focus = Some(pane);
                         }
-                    }
-                    if pane != focus
-                        && ui.rect_contains_pointer(ui.max_rect())
-                        && ui.input(|i| i.pointer.any_click())
-                    {
-                        new_focus = Some(pane);
-                    }
+                        // Sağ bölmenin sağ üst köşesinde kapatma düğmesi: bölünmüş
+                        // görünüm her zaman buradan kapatılabilir (odak nerede olursa
+                        // olsun). İçerikten sonra çizilir, bu yüzden üstte kalır.
+                        if pane == 1 {
+                            let r = ui.max_rect();
+                            let close = egui::Rect::from_min_size(
+                                egui::pos2(r.right() - 28.0, r.top() + 4.0),
+                                egui::vec2(24.0, 24.0),
+                            );
+                            let resp =
+                                ui.interact(close, ui.id().with("split_close"), Sense::click());
+                            let p = pal_of(ui);
+                            if resp.hovered() {
+                                ui.painter().circle_filled(
+                                    close.center(),
+                                    11.0,
+                                    if resp.is_pointer_button_down_on() {
+                                        p.nav_sel
+                                    } else {
+                                        p.hover
+                                    },
+                                );
+                            }
+                            ui.painter().text(
+                                close.center(),
+                                Align2::CENTER_CENTER,
+                                g::CLOSE,
+                                fluent_font(12.0),
+                                p.text,
+                            );
+                            if resp
+                                .on_hover_text(crate::i18n::t("Bölünmüş görünümü kapat"))
+                                .clicked()
+                            {
+                                actions.push(Action::ToggleSplit);
+                            }
+                        }
+                    });
                 });
             }
         });
@@ -6649,6 +6743,7 @@ impl App {
         let _ = rows;
 
         let mut area = egui::ScrollArea::vertical()
+            .id_salt(("grid_scroll", pane_no))
             .auto_shrink(false)
             .drag_to_scroll(false);
         if t.scroll_to_cursor {
@@ -6658,7 +6753,7 @@ impl App {
                     .find(|(_, _, l)| matches!(l, GLine::Row(a, b) if r >= *a && r < *b))
                     .map(|(y, _, _)| *y)
                     .unwrap_or(0.0);
-                let (off, vh) = *grid_scroll;
+                let (off, vh) = grid_scroll[pane_no as usize];
                 if top < off {
                     area = area.vertical_scroll_offset(top);
                 } else if top + tile_h > off + vh && vh > 0.0 {
@@ -6865,7 +6960,7 @@ impl App {
                 }
             }
         });
-        *grid_scroll = (out.state.offset.y, out.inner_rect.height());
+        grid_scroll[pane_no as usize] = (out.state.offset.y, out.inner_rect.height());
         if let Some(label) = toggle_group {
             if !t.collapsed_groups.remove(&label) {
                 t.collapsed_groups.insert(label);
@@ -6890,6 +6985,7 @@ impl App {
             (sel, !t.lists_files() && !t.is_gallery())
         };
         egui::ScrollArea::vertical()
+            .id_salt("preview_scroll")
             .auto_shrink(false)
             .show(ui, |ui| {
                 ui.add_space(8.0);
@@ -6924,7 +7020,9 @@ impl App {
         self.quick = Some(QuickLook::new(entry));
     }
 
-    /// Yerleşik Hızlı Önizleme katmanı: yan panelin aynı gövdesi, daha büyük.
+    /// Yerleşik Hızlı Önizleme katmanı: karartılmış zemin üzerinde, kendi başlık
+    /// çubuğu olan yuvarlatılmış bir kart. Başlıkta dosya adı, türü, *Aç*,
+    /// *Birlikte aç…* ve kapatma düğmesi bulunur; gövde yalnızca içeriktir.
     fn quick_look_ui(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
         let Some(mut ql) = self.quick.take() else {
             return;
@@ -6941,32 +7039,169 @@ impl App {
                 return;
             }
         }
-        let mut open = true;
         let mut close = ctx.input(|i| i.key_pressed(egui::Key::Escape));
         let screen = ctx.screen_rect();
         let size = egui::vec2(
-            (screen.width() * 0.68).clamp(360.0, 1100.0),
-            (screen.height() * 0.74).clamp(260.0, 900.0),
+            (screen.width() * 0.72).clamp(380.0, 1180.0),
+            (screen.height() * 0.78).clamp(280.0, 940.0),
         );
         let title = if crate::tab::is_virtual(&ql.entry.path) {
             self.loc_name(&ql.entry.path)
         } else {
             path_label(&ql.entry.path)
         };
-        egui::Window::new(title)
-            .id(egui::Id::new("quick_look"))
-            .open(&mut open)
+        let tn = type_name_cached(&mut self.type_names, &ql.entry);
+        let sub = if ql.entry.is_dir {
+            tn
+        } else {
+            format!("{} · {}", tn, fsutil::format_size(ql.entry.size))
+        };
+
+        // Arkadaki perde: uygulamayı karartır, dışına tıklanınca kapanır.
+        egui::Area::new(egui::Id::new("ql_scrim"))
+            .order(egui::Order::Middle)
+            .fixed_pos(screen.min)
+            .interactable(true)
+            .show(ctx, |ui| {
+                let (r, resp) = ui.allocate_exact_size(screen.size(), Sense::click());
+                ui.painter()
+                    .rect_filled(r, 0.0, Color32::from_black_alpha(96));
+                if resp.clicked() {
+                    close = true;
+                }
+            });
+
+        let p = pal(ctx.style().visuals.dark_mode);
+        egui::Window::new(title.clone())
+            // Yeni kimlik: eski (başlık çubuklu) pencerenin kayıtlı boyutu/konumu
+            // devralınmasın.
+            .id(egui::Id::new("quick_look_v2"))
+            .title_bar(false)
             .resizable(true)
+            .movable(true)
             .collapsible(false)
+            .vscroll(false)
+            .hscroll(false)
+            .constrain_to(screen)
             .default_size(size)
             .default_pos(screen.center() - size * 0.5)
+            .frame(
+                egui::Frame::new()
+                    .fill(p.content)
+                    .stroke(Stroke::new(1.0_f32, p.line))
+                    .corner_radius(10.0)
+                    .shadow(egui::epaint::Shadow {
+                        offset: [0, 10],
+                        blur: 28,
+                        spread: 0,
+                        color: Color32::from_black_alpha(90),
+                    })
+                    .inner_margin(egui::Margin::same(0)),
+            )
             .show(ctx, |ui| {
-                ui.set_min_height(size.y - 60.0);
-                self.preview_body(ui, &ql.entry, &mut ql.store, PvSurface::Overlay, actions);
+                let pw = pal_of(ui);
+                let weak = pw.weak;
+                egui::Frame::new()
+                    .inner_margin(egui::Margin {
+                        left: 14,
+                        right: 10,
+                        top: 10,
+                        bottom: 10,
+                    })
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            let ipx = icon_px(ctx, 32.0);
+                            let ikey = icon_key(
+                                &ql.entry.path,
+                                ql.entry.is_dir,
+                                &ql.entry.ext,
+                                ipx,
+                                ql.entry.plain_dir,
+                            );
+                            let (ir, _) =
+                                ui.allocate_exact_size(egui::vec2(22.0, 22.0), Sense::hover());
+                            if let Img::Ready(tex) =
+                                self.images.get(&ikey, &ql.entry.path, ipx, true)
+                            {
+                                ui.painter().image(
+                                    tex.id(),
+                                    fit_rect(tex.size_vec2(), ir),
+                                    Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                                    Color32::WHITE,
+                                );
+                            }
+                            ui.add_space(2.0);
+                            ui.vertical(|ui| {
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(title.clone()).size(text_size(13.5)),
+                                    )
+                                    .truncate(),
+                                );
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new(sub.clone())
+                                            .size(text_size(11.0))
+                                            .color(weak),
+                                    )
+                                    .truncate(),
+                                );
+                            });
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                if flat_icon(ui, g::CLOSE, egui::vec2(28.0, 28.0), 12.0, true)
+                                    .on_hover_text(crate::i18n::t("Kapat"))
+                                    .clicked()
+                                {
+                                    close = true;
+                                }
+                                if !ql.entry.is_dir
+                                    && ui
+                                        .add(
+                                            egui::Button::new(crate::i18n::t("Birlikte aç…"))
+                                                .min_size(egui::vec2(0.0, 26.0)),
+                                        )
+                                        .clicked()
+                                {
+                                    actions.push(Action::OpenWith(ql.entry.path.clone()));
+                                }
+                                if ui
+                                    .add(
+                                        egui::Button::new(crate::i18n::t("Aç"))
+                                            .min_size(egui::vec2(0.0, 26.0)),
+                                    )
+                                    .clicked()
+                                {
+                                    actions.push(Action::OpenEntry(
+                                        ql.entry.path.clone(),
+                                        ql.entry.is_dir,
+                                    ));
+                                }
+                            });
+                        });
+                    });
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .id_salt("ql_body")
+                    .auto_shrink(false)
+                    .show(ui, |ui| {
+                        egui::Frame::new()
+                            .inner_margin(egui::Margin {
+                                left: 14,
+                                right: 14,
+                                top: 12,
+                                bottom: 14,
+                            })
+                            .show(ui, |ui| {
+                                self.preview_body(
+                                    ui,
+                                    &ql.entry,
+                                    &mut ql.store,
+                                    PvSurface::Overlay,
+                                    actions,
+                                );
+                            });
+                    });
             });
-        if !open {
-            close = true;
-        }
         if close {
             self.quick = None;
         } else {
@@ -7004,54 +7239,68 @@ impl App {
         };
         let office = !e.is_dir && crate::ooxml::is_office(&e.ext);
         let panel = surf == PvSurface::Panel;
-        let hero_h = if panel { 200.0 } else { 260.0 };
-        let px = icon_px(&ctx, if panel { 200.0 } else { 480.0 });
         let thumb = !e.is_dir && (fsutil::has_thumbnail(&e.ext) || office);
-        let key = if thumb {
-            format!("t{px}:{}", e.path.display())
-        } else {
-            icon_key(&e.path, e.is_dir, &e.ext, px, e.plain_dir)
+        // Oynatıcı hazır olduğunda büyük küçük resim gösterilmez.
+        let hero = !e.is_dir && (media.is_none() || !self.media_ready(media));
+        const UV: Rect = Rect {
+            min: Pos2 { x: 0.0, y: 0.0 },
+            max: Pos2 { x: 1.0, y: 1.0 },
         };
-        ui.vertical_centered(|ui| {
-            let w = if panel {
-                ui.available_width().min(280.0)
+
+        if panel {
+            let px = icon_px(&ctx, 200.0);
+            let key = if thumb {
+                format!("t{px}:{}", e.path.display())
             } else {
-                ui.available_width().min(560.0)
+                icon_key(&e.path, e.is_dir, &e.ext, px, e.plain_dir)
             };
-            // Medyanın oynatıcısı hazır olduğunda büyük küçük resim gösterilmez.
-            if media.is_none() || !self.media_ready(media) {
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(w, hero_h), Sense::hover());
-                if let Img::Ready(tex) = self.images.get(&key, &e.path, px, !thumb) {
-                    let r = fit_rect(tex.size_vec2(), rect);
-                    ui.painter().image(
-                        tex.id(),
-                        r,
-                        Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                        Color32::WHITE,
+            ui.vertical_centered(|ui| {
+                if hero {
+                    let (rect, _) = ui.allocate_exact_size(
+                        egui::vec2(ui.available_width().min(280.0), 200.0),
+                        Sense::hover(),
                     );
+                    if let Img::Ready(tex) = self.images.get(&key, &e.path, px, !thumb) {
+                        let r = fit_rect(tex.size_vec2(), rect);
+                        ui.painter().image(tex.id(), r, UV, Color32::WHITE);
+                    }
                 }
+                ui.add_space(6.0);
+                // Explorer dosya adını kalın çizmez.
+                ui.add(egui::Label::new(RichText::new(title).size(17.0)).wrap());
+                let sub = if e.is_dir {
+                    type_name.clone()
+                } else {
+                    format!("{} · {}", type_name, fsutil::format_size(e.size))
+                };
+                ui.add(
+                    egui::Label::new(RichText::new(sub).size(text_size(12.0)).color(weak)).wrap(),
+                );
+            });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.add_space(2.0);
+                if ui.button(crate::i18n::t("Aç")).clicked() {
+                    actions.push(Action::OpenEntry(e.path.clone(), e.is_dir));
+                }
+                if !e.is_dir && ui.button(crate::i18n::t("Birlikte aç…")).clicked() {
+                    actions.push(Action::OpenWith(e.path.clone()));
+                }
+            });
+            ui.add_space(4.0);
+        } else if hero && thumb {
+            // Hızlı Önizleme: başlık pencerenin kendi çubuğunda. Görsel/PDF
+            // küçük resmi alanı kaplar; altına dosya ayrıntısı eklenmez.
+            let px = icon_px(&ctx, 640.0);
+            let key = format!("t{px}:{}", e.path.display());
+            let h = (ui.available_height() - 16.0).clamp(240.0, 780.0);
+            let (rect, _) =
+                ui.allocate_exact_size(egui::vec2(ui.available_width(), h), Sense::hover());
+            if let Img::Ready(tex) = self.images.get(&key, &e.path, px, false) {
+                let r = fit_rect(tex.size_vec2(), rect);
+                ui.painter().image(tex.id(), r, UV, Color32::WHITE);
             }
-            ui.add_space(6.0);
-            // Explorer dosya adını kalın çizmez.
-            ui.add(egui::Label::new(RichText::new(title).size(17.0)).wrap());
-            let sub = if e.is_dir {
-                type_name.clone()
-            } else {
-                format!("{} · {}", type_name, fsutil::format_size(e.size))
-            };
-            ui.add(egui::Label::new(RichText::new(sub).size(text_size(12.0)).color(weak)).wrap());
-        });
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.add_space(2.0);
-            if ui.button(crate::i18n::t("Aç")).clicked() {
-                actions.push(Action::OpenEntry(e.path.clone(), e.is_dir));
-            }
-            if !e.is_dir && ui.button(crate::i18n::t("Birlikte aç…")).clicked() {
-                actions.push(Action::OpenWith(e.path.clone()));
-            }
-        });
-        ui.add_space(4.0);
+        }
 
         if e.is_dir {
             self.folder_preview(ui, e, surf);
@@ -7065,16 +7314,15 @@ impl App {
             ensure_preview(store, &e.path, &ctx);
             let data = store.data.lock().unwrap();
             match data.as_ref() {
-                Some((p, PreviewData::Office(s))) if p == &e.path => {
+                Some((p, PreviewData::Office(doc))) if p == &e.path => {
                     let max_h = if panel {
                         420.0
                     } else {
                         (ui.available_height() - 12.0).max(240.0)
                     };
-                    text_frame(ui, max_h, |ui| {
-                        ui.add(egui::Label::new(
-                            egui::RichText::new(s).monospace().size(text_size(12.5)),
-                        ));
+                    let colors = code_colors(ui, self.accent);
+                    text_frame(ui, max_h, "office", |ui| {
+                        crate::docview::render(ui, doc, &colors, text_size(13.0));
                     });
                 }
                 Some((p, PreviewData::Error(err))) if p == &e.path => {
@@ -7089,9 +7337,12 @@ impl App {
             }
             return;
         }
-        // Küçük resmi olan görseller: büyük görsel yeterli, altına meta veri.
+        // Küçük resmi olan görseller: panelde büyük görselin altına meta veri,
+        // Hızlı Önizleme'de yalnızca görsel (ayrıntı kartı istenmiyor).
         if thumb {
-            metadata_block(ui, e, &type_name, &sid);
+            if panel {
+                metadata_block(ui, e, &type_name, &sid);
+            }
             return;
         }
         if e.size == 0 {
@@ -7114,7 +7365,7 @@ impl App {
                 } else {
                     (ui.available_height() - 12.0).max(240.0)
                 };
-                text_frame(ui, max_h, |ui| {
+                text_frame(ui, max_h, "text", |ui| {
                     if is_md {
                         ui.set_width(ui.available_width());
                         crate::markdown::render(
@@ -7156,9 +7407,16 @@ impl App {
         kind: crate::media::MediaKind,
         surf: PvSurface,
     ) {
+        let accent = format!(
+            "#{:02X}{:02X}{:02X}",
+            self.accent.r(),
+            self.accent.g(),
+            self.accent.b()
+        );
         if self.web.ready() {
             let h = match (surf, kind) {
-                (_, crate::media::MediaKind::Audio) => 96.0,
+                (PvSurface::Panel, crate::media::MediaKind::Audio) => 196.0,
+                (PvSurface::Overlay, crate::media::MediaKind::Audio) => 220.0,
                 (PvSurface::Panel, _) => (ui.available_height() - 8.0).clamp(160.0, 420.0),
                 (PvSurface::Overlay, _) => (ui.available_height() - 8.0).max(200.0),
             };
@@ -7169,6 +7427,8 @@ impl App {
                 kind,
                 rect,
                 overlay: surf == PvSurface::Overlay,
+                dark: ui.visuals().dark_mode,
+                accent: accent.clone(),
             });
             return;
         }
@@ -7177,7 +7437,8 @@ impl App {
         let weak = ui.visuals().weak_text_color();
         let failed = self.web.failed();
         let h = match (surf, kind) {
-            (_, crate::media::MediaKind::Audio) => 96.0,
+            (PvSurface::Panel, crate::media::MediaKind::Audio) => 196.0,
+            (PvSurface::Overlay, crate::media::MediaKind::Audio) => 220.0,
             (PvSurface::Panel, _) => 200.0,
             (PvSurface::Overlay, _) => 260.0,
         };
@@ -7188,6 +7449,8 @@ impl App {
                 kind,
                 rect,
                 overlay: surf == PvSurface::Overlay,
+                dark: ui.visuals().dark_mode,
+                accent: accent.clone(),
             });
         }
         ui.add_space(4.0);
@@ -7315,6 +7578,7 @@ impl App {
             )
         };
         egui::ScrollArea::vertical()
+            .id_salt("details_scroll")
             .auto_shrink(false)
             .show(ui, |ui| {
                 ui.add_space(4.0);
@@ -7946,7 +8210,10 @@ impl App {
                     ui.heading(crate::i18n::t("Klavye kısayolları"));
                     ui.label(RichText::new(crate::i18n::t("Dosya Gezgini'ndeki kısayolların hepsi aynı; ekstralar ★ ile işaretli.")).weak());
                     ui.add_space(6.0);
-                    egui::ScrollArea::vertical().max_height(480.0).show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("help_scroll")
+                        .max_height(480.0)
+                        .show(ui, |ui| {
                         egui::Grid::new("keys").num_columns(2).striped(true).spacing([16.0, 6.0]).show(ui, |ui| {
                             for (k, d) in HELP.iter().filter(|(k, _)| NATIVE_MENU || !k.contains("F10")) {
                                 ui.label(RichText::new(crate::i18n::t(k)).monospace().strong());
@@ -8689,9 +8956,12 @@ mod scroll_patch_tests {
         assert_eq!(s.smooth_scroll_delta, vec2(0.0, -20.0));
     }
 
+    /// Bölünmüş görünümde iki bölme **ayrı** kaydırma alanlarına sahip olmalı.
+    /// egui kardeş `Ui`'lere aynı `ui.id()` verdiği için bölmeler `push_id` ile
+    /// ayrıştırılır; bu test o sözleşmeyi korur (aksi hâlde iki bölme aynı kaydırma
+    /// konumunu paylaşır ve hata ayıklamada kırmızı çerçeve çizilir).
     #[test]
-    #[ignore = "tanılama: egui 0.31 kardeş Ui'lere aynı ui.id() verir (düzeltme bekliyor)"]
-    fn probe_sibling_pane_scroll_ids() {
+    fn split_panes_have_independent_scroll_areas() {
         let ctx = egui::Context::default();
         let mut ids: Vec<egui::Id> = Vec::new();
         for _ in 0..2 {
@@ -8706,15 +8976,17 @@ mod scroll_patch_tests {
             let _ = ctx.run(raw, |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     ui.horizontal_top(|ui| {
-                        for _p in [0u8, 1] {
+                        for pane in [0u8, 1] {
                             ui.allocate_ui_with_layout(
                                 egui::vec2(500.0, 600.0),
                                 egui::Layout::top_down(egui::Align::Min),
                                 |ui| {
-                                    let out = egui::ScrollArea::vertical().show(ui, |ui| {
-                                        ui.label("x");
+                                    ui.push_id(("pane", pane), |ui| {
+                                        let out = egui::ScrollArea::vertical().show(ui, |ui| {
+                                            ui.label("x");
+                                        });
+                                        ids.push(out.id);
                                     });
-                                    ids.push(out.id);
                                 },
                             );
                         }
@@ -8722,8 +8994,7 @@ mod scroll_patch_tests {
                 });
             });
         }
-        eprintln!("probe ids: {:?} {:?}", ids[0], ids[1]);
-        assert_ne!(ids[0], ids[1]);
+        assert_ne!(ids[0], ids[1], "iki bölme aynı kaydırma alanını paylaşıyor");
     }
 
     fn clash_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
@@ -8750,47 +9021,54 @@ mod scroll_patch_tests {
         out
     }
 
-    /// Yan panel (Ayrıntılar) ile Hızlı Önizleme penceresi aynı karede açıkken
-    /// kaydırma alanı kimlikleri çakışmamalı.
+    /// Kırmızı çerçeve, aynı egui kimliğinin iki kez kullanılmasıdır. Bölünmüş
+    /// görünümde iki bölme aynı karede çizildiği için hiçbir kimlik çakışmamalı.
     #[test]
-    #[ignore = "tanılama: Hızlı Önizleme + Ayrıntılar kimlik çakışması taraması"]
-    fn probe_quick_look_and_details_panel() {
+    fn split_panes_draw_without_id_clashes() {
         let ctx = egui::Context::default();
         let mut clashes = Vec::new();
         for _ in 0..3 {
             let raw = RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
-                    egui::vec2(1600.0, 900.0),
+                    egui::vec2(1200.0, 800.0),
                 )),
                 ..Default::default()
             };
             let out = ctx.run(raw, |ctx| {
-                egui::SidePanel::right("sidepane").show(ctx, |ui| {
-                    egui::ScrollArea::vertical()
-                        .auto_shrink(false)
-                        .show(ui, |ui| {
-                            ui.add_space(4.0);
-                            ui.label("Ayrintilar");
-                        });
-                });
-                egui::CentralPanel::default().show(ctx, |_ui| {});
-                egui::Window::new("ql")
-                    .id(egui::Id::new("quick_look"))
-                    .resizable(true)
-                    .show(ctx, |ui| {
-                        ui.set_min_height(600.0);
-                        ui.label("# Baslik");
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.horizontal_top(|ui| {
+                        for pane in [0u8, 1] {
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(500.0, 600.0),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| {
+                                    ui.push_id(("pane", pane), |ui| {
+                                        egui::ScrollArea::vertical()
+                                            .id_salt(("grid_scroll", pane))
+                                            .show(ui, |ui| {
+                                                for i in 0..40 {
+                                                    ui.label(format!("row {i}"));
+                                                }
+                                            });
+                                        ui.group(|ui| {
+                                            ui.label("alt bilgi");
+                                        });
+                                    });
+                                },
+                            );
+                        }
                     });
+                });
             });
             clashes = clash_texts(&out.shapes);
             if !clashes.is_empty() {
                 break;
             }
         }
-        for c in &clashes {
-            eprintln!("{c}");
-        }
-        assert!(clashes.is_empty(), "id clash: {clashes:?}");
+        assert!(
+            clashes.is_empty(),
+            "bölmelerde kimlik çakışması: {clashes:?}"
+        );
     }
 }

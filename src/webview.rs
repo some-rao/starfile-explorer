@@ -21,8 +21,9 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_DENY_CORS,
 };
 use webview2_com::{
-    CoreWebView2EnvironmentOptions, CreateCoreWebView2ControllerCompletedHandler,
-    CreateCoreWebView2EnvironmentCompletedHandler,
+    AcceleratorKeyPressedEventHandler, CoreWebView2EnvironmentOptions,
+    CreateCoreWebView2ControllerCompletedHandler, CreateCoreWebView2EnvironmentCompletedHandler,
+    ExecuteScriptCompletedHandler,
 };
 
 use crate::media::MediaKind;
@@ -35,6 +36,20 @@ pub struct Want {
     pub rect: egui::Rect,
     /// İstek Hızlı Önizleme katmanından mı geldi? (yan panel görüntüleyicisi gizlenir)
     pub overlay: bool,
+    /// Oynatıcı sayfasının teması (uygulamanın temasıyla aynı olsun).
+    pub dark: bool,
+    /// Vurgu rengi `#RRGGBB`.
+    pub accent: String,
+}
+
+/// Oynatıcı içindeyken uygulamaya iletilen tuşlar.
+///
+/// WebView2 odak aldığında tuşlar egui'ye ulaşmaz; Boşluk/Esc yakalanıp
+/// buraya yazılır, uygulama her karede okur (önizlemeyi kapatmak için).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HotKey {
+    Space,
+    Escape,
 }
 
 enum State {
@@ -53,6 +68,8 @@ pub struct WebView {
     visible: bool,
     bounds: Option<[i32; 4]>,
     scale: f32,
+    /// Oynatıcı içindeyken yakalanan tuşlar (bkz. `HotKey`).
+    keys: Rc<RefCell<Vec<HotKey>>>,
 }
 
 impl WebView {
@@ -63,7 +80,13 @@ impl WebView {
             visible: false,
             bounds: None,
             scale: 0.0,
+            keys: Rc::new(RefCell::new(Vec::new())),
         }
+    }
+
+    /// Görüntüleyici içindeyken basılan Boşluk/Esc tuşları (bir kez okunur).
+    pub fn take_keys(&self) -> Vec<HotKey> {
+        std::mem::take(&mut *self.keys.borrow_mut())
     }
 
     /// Görüntüleyici hazır mı? Değilse önizleme küçük resim/meta veri gösterir.
@@ -104,6 +127,9 @@ impl WebView {
             Some(w) if allow && w.rect.width() >= 8.0 && w.rect.height() >= 8.0 => w,
             _ => {
                 if self.visible {
+                    // Gizlenirken ses/video duraklasın: önizleme kapanınca çalmaya
+                    // devam eden bir oynatıcı kalmasın.
+                    pause(&controller);
                     unsafe {
                         let _ = controller.SetIsVisible(BOOL(0));
                     }
@@ -155,7 +181,7 @@ impl WebView {
                         }
                     }
                     kind => {
-                        let player = player_page(kind, &w.path);
+                        let player = player_page(kind, &w.path, w.dark, &w.accent);
                         if let Some(page) = player {
                             unsafe {
                                 if let Ok(core3) = core.cast::<ICoreWebView2_3>() {
@@ -212,6 +238,7 @@ impl WebView {
         let _ = std::fs::write(assets.join("player.html"), PLAYER_HTML);
 
         let state = Rc::clone(&self.state);
+        let keys = Rc::clone(&self.keys);
         let ctx2 = ctx.clone();
         let handler =
             CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(move |hr, env| {
@@ -222,12 +249,14 @@ impl WebView {
                 };
                 let state = Rc::clone(&state);
                 let failed = Rc::clone(&state);
+                let keys = Rc::clone(&keys);
                 let ctx3 = ctx2.clone();
                 let handler = CreateCoreWebView2ControllerCompletedHandler::create(Box::new(
                     move |hr, controller| {
                         match controller.filter(|_| hr.is_ok()) {
                             Some(c) => {
                                 configure(&c);
+                                hook_keys(&c, Rc::clone(&keys), ctx3.clone());
                                 *state.borrow_mut() = State::Ready(c);
                             }
                             None => *state.borrow_mut() = State::Failed,
@@ -246,8 +275,15 @@ impl WebView {
                 Ok(())
             }));
 
-        let options: ICoreWebView2EnvironmentOptions =
-            CoreWebView2EnvironmentOptions::default().into();
+        // Ses/video açılır açılmaz başlasın (Chromium varsayılan olarak kullanıcı
+        // hareketi bekler).
+        let opts = CoreWebView2EnvironmentOptions::default();
+        unsafe {
+            opts.set_additional_browser_arguments(String::from(
+                "--autoplay-policy=no-user-gesture-required",
+            ));
+        }
+        let options: ICoreWebView2EnvironmentOptions = opts.into();
         let folder = HSTRING::from(data.to_string_lossy().as_ref());
         let result = unsafe {
             CreateCoreWebView2EnvironmentWithOptions(None::<&PCWSTR>, &folder, &options, &handler)
@@ -272,6 +308,53 @@ fn configure(c: &ICoreWebView2Controller) {
                 let _ = s.SetIsZoomControlEnabled(BOOL(0));
             }
         }
+    }
+}
+
+/// Oynatıcıdaki ses/videoyu duraklatır (önizleme kapanırken/gizlenirken).
+fn pause(c: &ICoreWebView2Controller) {
+    if let Ok(core) = unsafe { c.CoreWebView2() } {
+        let done = ExecuteScriptCompletedHandler::create(Box::new(|_, _| Ok(())));
+        unsafe {
+            let _ = core.ExecuteScript(
+                &HSTRING::from(
+                    "document.querySelectorAll('video,audio').forEach(function(m){try{m.pause()}catch(e){}})",
+                ),
+                &done,
+            );
+        }
+    }
+}
+
+/// Boşluk ve Esc tuşlarını uygulamaya iletir: WebView2 odaklıyken de önizleme
+/// kapanabilsin (tuşlar aksi hâlde egui'ye hiç ulaşmaz).
+fn hook_keys(c: &ICoreWebView2Controller, keys: Rc<RefCell<Vec<HotKey>>>, ctx: egui::Context) {
+    let handler = AcceleratorKeyPressedEventHandler::create(Box::new(move |_, args| {
+        let Some(a) = args else {
+            return Ok(());
+        };
+        let mut vk = 0u32;
+        if unsafe { a.VirtualKey(&mut vk) }.is_err() {
+            return Ok(());
+        }
+        let key = match vk {
+            0x20 => Some(HotKey::Space),
+            0x1B => Some(HotKey::Escape),
+            _ => None,
+        };
+        if let Some(k) = key {
+            unsafe {
+                let _ = a.SetHandled(BOOL(1));
+            }
+            keys.borrow_mut().push(k);
+            // Tuş egui'ye hiç ulaşmadığı için kareyi kendimiz istemeliyiz.
+            ctx.request_repaint();
+        }
+        Ok(())
+    }));
+    let mut token = Default::default();
+    unsafe {
+        let _ = c.add_AcceleratorKeyPressed(&handler, &mut token);
     }
 }
 
@@ -300,15 +383,18 @@ fn file_uri(path: &Path) -> String {
 }
 
 /// Oynatıcı sayfasının adresi; medya, ebeveyn klasörünün sanal ana bilgisayarından gelir.
-fn player_page(kind: MediaKind, path: &Path) -> Option<String> {
+fn player_page(kind: MediaKind, path: &Path, dark: bool, accent: &str) -> Option<String> {
     let name = path.file_name()?.to_string_lossy();
     let kind = if kind == MediaKind::Audio {
         "audio"
     } else {
         "video"
     };
+    let theme = if dark { "dark" } else { "light" };
     Some(format!(
-        "https://{APP_HOST}/player.html?kind={kind}&src=https%3A%2F%2F{MEDIA_HOST}%2F{}",
+        "https://{APP_HOST}/player.html?kind={kind}&theme={theme}&accent={}&name={}&src=https%3A%2F%2F{MEDIA_HOST}%2F{}",
+        percent(accent, false),
+        percent(&name, false),
         percent(&name, false)
     ))
 }
@@ -344,8 +430,16 @@ mod tests {
 
     #[test]
     fn media_urls_are_encoded() {
-        let page = player_page(MediaKind::Audio, Path::new("C:\\m\\şarkı #1.mp3")).unwrap();
+        let page = player_page(
+            MediaKind::Audio,
+            Path::new("C:\\m\\şarkı #1.mp3"),
+            true,
+            "#0078D4",
+        )
+        .unwrap();
         assert!(page.contains("kind=audio"));
+        assert!(page.contains("theme=dark"));
+        assert!(page.contains("accent=%230078D4"));
         assert!(page.contains("%C5%9Fark%C4%B1%20%231.mp3"));
     }
 }

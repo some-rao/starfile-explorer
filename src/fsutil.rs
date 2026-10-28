@@ -1226,16 +1226,16 @@ pub fn read_children(dir: &Path, show_hidden: bool, limit: usize) -> Vec<Entry> 
 
 pub enum PreviewData {
     Text(String),
-    /// Ofis belgesinden çıkarılmış metin (bkz. `ooxml`)
-    Office(String),
+    /// Ofis belgesinden çıkarılmış yapı (bkz. `ooxml`)
+    Office(crate::ooxml::Doc),
     Binary,
     Error(String),
 }
 
 pub fn read_preview(path: &Path) -> PreviewData {
     // Ofis belgeleri zip+XML'dir; bayt olarak metin sayılmaz, ayrıştırılır.
-    if let Some(text) = crate::ooxml::extract(path) {
-        return PreviewData::Office(text);
+    if let Some(doc) = crate::ooxml::document(path) {
+        return PreviewData::Office(doc);
     }
     let mut f = match fs::File::open(path) {
         Ok(f) => f,
