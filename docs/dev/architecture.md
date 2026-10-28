@@ -206,12 +206,15 @@ menu or OLE drag, because those swallow the real mouse-up. `on_exit` cancels sea
 
 Added after the six-phase work: `quick_look_ui` draws the built-in Quick Look overlay after `overlays`
 and before `drag_overlay`; then `web.sync(hwnd, want, allow, ctx)` positions/hides the WebView2 child
-window using this frame's `App.web_want` (cleared right after), and only then does `scroll_pump` run.
+window using this frame's `App.web_want` (cleared right after).
 `web_want` is written by whichever surface drew a PDF/video/audio preview last (Quick Look wins).
 
-**Repaint policy** (no continuous repaint): input events; 100 ms while jobs run; 250 ms while toasts are
-visible; 20 s heartbeat; `request_repaint()` from worker threads; `request_repaint_after(16..)` for
-debounced refreshes. Any new background work must request a repaint itself.
+**Repaint policy** (no continuous repaint): input events; 8 ms while a scroll gesture or touchpad
+momentum is in flight; 100 ms while jobs run; 250 ms while toasts are visible; 20 s heartbeat;
+`request_repaint()` from worker threads; `request_repaint_after(16..)` for debounced refreshes. Any new
+background work must request a repaint itself. vsync is on (`vsync: true` in `main.rs`): presentation is
+locked to the display's refresh, which gives touchpad pan a regular frame cadence; an earlier
+`WM_TIMER` scroll pump is gone.
 
 ---
 

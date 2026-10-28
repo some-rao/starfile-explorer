@@ -329,11 +329,6 @@ impl ImageCache {
         *q = keep;
     }
 
-    /// Kuyrukta üretilmeyi bekleyen görüntü sayısı (geçici tanı için).
-    pub fn pending(&self) -> usize {
-        self.queue.0.lock().unwrap().len()
-    }
-
     pub fn poll(&mut self, ctx: &egui::Context) {
         self.frame += 1;
         while let Ok((key, img)) = self.rx.try_recv() {

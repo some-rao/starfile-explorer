@@ -46,7 +46,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     MIIM_BITMAP, MIIM_FTYPE, MIIM_ID, MIIM_STATE, MIIM_STRING, MIIM_SUBMENU, SW_SHOWNORMAL,
     TPM_RETURNCMD, TPM_RIGHTBUTTON, WH_CBT, WM_CREATE, WM_DRAWITEM, WM_INITMENUPOPUP,
     WM_MEASUREITEM, WM_MENUCHAR, WM_MENUSELECT, WM_NCHITTEST, WM_SETTINGCHANGE, WM_SHOWWINDOW,
-    WM_THEMECHANGED, WM_TIMER, WS_CHILD,
+    WM_THEMECHANGED, WS_CHILD,
 };
 
 pub use crate::images::{ImageCache, Img};
@@ -341,10 +341,6 @@ unsafe extern "system" fn subclass_proc(
     // Metin ölçeği, vurgu rengi, animasyonlar veya tema değişti
     if msg == WM_SETTINGCHANGE || msg == WM_THEMECHANGED {
         crate::system::mark_dirty();
-        crate::system::repaint();
-    }
-    // Kaydırma pompası tiki: yeniden çizim iste (WM_PAINT kuyrukta boğulmasın).
-    if msg == WM_TIMER && wp.0 == crate::system::SCROLL_PUMP_ID {
         crate::system::repaint();
     }
     if msg == WM_NCHITTEST {

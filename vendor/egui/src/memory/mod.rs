@@ -294,15 +294,6 @@ pub struct Options {
     /// gets momentum coasting in `InputState`.
     pub touchpad_line_scroll_speed: f32,
 
-    /// Swift Explorer patch: spread touchpad pan over a backlog of frames
-    /// instead of applying it in the frame it arrives (see README).
-    ///
-    /// The paced mode renders an even stream but trails the finger by the
-    /// backlog (`InputState::pan_momentum` reports it); `false` keeps 1:1
-    /// tracking and is the default. Kept as a diagnostic A/B switch while the
-    /// scroll feel is tuned.
-    pub pan_pacing: bool,
-
     /// Controls the speed at which we zoom in when doing ctrl/cmd + scroll.
     pub scroll_zoom_speed: f32,
 
@@ -351,7 +342,6 @@ impl Default for Options {
             // Input:
             line_scroll_speed,
             touchpad_line_scroll_speed: line_scroll_speed,
-            pan_pacing: false,
             scroll_zoom_speed: 1.0 / 200.0,
             input_options: Default::default(),
             reduce_texture_memory: false,
@@ -410,7 +400,6 @@ impl Options {
 
             line_scroll_speed,
             touchpad_line_scroll_speed,
-            pan_pacing,
             scroll_zoom_speed,
             input_options,
             reduce_texture_memory,
@@ -488,12 +477,6 @@ impl Options {
                         crate::DragValue::new(touchpad_line_scroll_speed).range(0.0..=f32::INFINITY),
                     );
                 });
-                ui.checkbox(pan_pacing, "Pace touchpad pan (0 = 1:1 with the finger)")
-                    .on_hover_text(
-                        "Off: each frame applies the pan the pad reported. On: move at \
-                         the smoothed speed out of a backlog, which renders more evenly \
-                         but trails the finger.",
-                    );
                 input_options.ui(ui);
             });
 

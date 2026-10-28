@@ -44,10 +44,10 @@ list row height in `src/app.rs::apply_theme`, so a notch moves like Explorer's.
 
 ### 3. Touchpad pan: 1:1 tracking with momentum coasting
 
-Measured on a real precision touchpad (`swift-wheel-<pid>.log`, see the app's
-temporary `SWIFT_EXPLORER_WHEELLOG=1` logger): touchpad pan arrives as
-**continuously fractional** `MouseWheelUnit::Line` deltas at ~30 Hz — while a
-real mouse wheel notch is always a whole number of lines.
+Measured on a real precision touchpad (frame log from a temporary build):
+touchpad pan arrives as **continuously fractional** `MouseWheelUnit::Line`
+deltas at ~30 Hz — while a real mouse wheel notch is always a whole number of
+lines.
 
 Patching `src/input_state/mod.rs`:
 
@@ -60,13 +60,10 @@ Patching `src/input_state/mod.rs`:
   sets it to one list row) instead of `line_scroll_speed`, which the app raises
   to 3 rows per *mouse-wheel* notch — mixing the two made pan race ~3× ahead of
   the finger.
-- **Application (default, `Options::pan_pacing = false`):** the delta that
-  arrived since the last frame is applied in that frame — 1:1 tracking, no
-  backlog, so the content stays under the finger. `InputState::pan_momentum()`
-  therefore reports zero slip in this mode.
-- **Paced mode (`pan_pacing = true`, diagnostic A/B):** deltas fill
-  `pan_pending` and each frame hands out `velocity * dt` — an even stream that
-  trails the finger by the backlog. Selected with `SWIFT_PAN_PACING=1`.
+- **Application:** the delta that arrived since the last frame is applied in
+  that frame — 1:1 tracking, no backlog, so the content stays under the finger.
+  (A velocity-paced mode that spread the delta over later frames was tried and
+  dropped: it renders evenly but trails the finger, which reads as stiffness.)
 - **Lift detection:** the pad sends no "contacts up" message, so a gap in the
   event stream is the only lift signal. The gate follows the observed cadence
   (`pan_gap`: 1.6 × the smoothed inter-event gap, clamped to 35–100 ms) instead
@@ -88,13 +85,13 @@ Patching `src/input_state/mod.rs`:
 
 Real wheel notches and Ctrl+wheel zoom are untouched.
 
-### 4. Momentum read-out for the app's diagnostics (`src/input_state/mod.rs`)
+### 4. Pan state read-out (`src/input_state/mod.rs`)
 
-`InputState::pan_momentum()` (velocity, not-yet-applied backlog), `pan_delta()`
-(this frame's pad delta) and `pan_events()` (how many pad reports were folded
-into it — more than one means the frame was late and the pad's reports piled up)
-expose the pan state to the app. They are read only by the
-`SWIFT_EXPLORER_WHEELLOG` frame logger (`src/app.rs::perf_log`); no behaviour
-depends on them.
+`InputState::pan_velocity()` (points per second the content is coasting at,
+signed) and `pan_delta()` (this frame's pad delta) expose the pan state:
+
+- the app reads `pan_velocity()` to keep requesting frames while momentum runs;
+- the scroll-patch tests use both to tell a pad pan from a wheel notch and to
+  assert coast speed and direction.
 
 
