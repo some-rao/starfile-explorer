@@ -85,10 +85,10 @@ fn main() -> eframe::Result<()> {
                 eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png"))
                     .unwrap_or_default(),
             ),
-        // vsync kapalı: sunum kuyruğu CPU'yu vblank'ta bekletmesin — kaydırma
-        // pompası ~60 Hz ritmi verirken çizim döngüsü bağımsız ilerlesin.
-        // DWM kompozisyon Windows'ta yamukluğu yine engeller.
-        vsync: false,
+        // vsync açık: sunum vblank'a kilitlenir, kare aralığı düzenli olur ve
+        // kaydırma akıcı çıkar. `SWIFT_VSYNC=0` eski serbest döngüye döner
+        // (ritmi scroll_pump'ın WM_TIMER'ı verir) — A/B ölçümü için.
+        vsync: crate::system::vsync_enabled(),
         ..Default::default()
     };
     #[cfg(windows)]

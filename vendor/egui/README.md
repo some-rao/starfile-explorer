@@ -5,7 +5,7 @@ Upstream: <https://github.com/emilk/egui> — crate `egui` 0.31.1, MIT OR Apache
 Wired in through `[patch.crates-io]` in the workspace `Cargo.toml` (together with
 the sibling `vendor/epaint`). It must stay on the same `0.31.x` version that
 `eframe`/`egui_extras` resolve to; when bumping egui, copy the matching release
-over this directory again and re-apply the two changes below.
+over this directory again and re-apply the patches below.
 
 ## Changes
 
@@ -44,32 +44,57 @@ list row height in `src/app.rs::apply_theme`, so a notch moves like Explorer's.
 
 ### 3. Touchpad pan: 1:1 tracking with momentum coasting
 
-Measured on a real precision touchpad (`swift-wheel-log.txt`, see the app's
+Measured on a real precision touchpad (`swift-wheel-<pid>.log`, see the app's
 temporary `SWIFT_EXPLORER_WHEELLOG=1` logger): touchpad pan arrives as
 **continuously fractional** `MouseWheelUnit::Line` deltas at ~30 Hz — while a
 real mouse wheel notch is always a whole number of lines.
 
 Patching `src/input_state/mod.rs`:
 
-- **Classification:** `Line` deltas with a fractional axis are a touchpad pan.
-  Whole-line deltas (and `Page` units) keep the classic wheel path.
-- **Scale:** pan is converted with the new `Options::touchpad_line_scroll_speed`
-  (app sets it to one list row) instead of `line_scroll_speed`, which the app
-  raises to 3 rows per *mouse-wheel* notch — mixing the two was pan racing ~3×
-  ahead of the finger.
-- **Application:** pan deltas apply directly (1:1 tracking, no extra drain).
-- **Momentum:** `InputState` keeps a low-passed pan velocity
-  (`touch_pan_velocity`); once pan events fall silent > 100 ms (finger lifted —
-  Windows even sends a final flick burst) the motion coasts with that
-  velocity, decaying exponentially (τ = 0.3 s, capped at 5000 px/s, stops
-  below 30 px/s). A slow crawl coasts a few px, a hard flick keeps flying.
-  `wants_repaint_after` keeps frames flowing while coasting.
+- **Classification:** `Point` deltas and `Line` deltas with a fractional axis
+  are a touchpad pan; whole-line `Line` and `Page` units keep the classic wheel
+  path. (Previously only fractional `Line` was recognized, so a driver that
+  reports pixel deltas — some precision touchpads and smooth-scroll mice do —
+  fell through to the wheel path and stepped notch by notch.)
+- **Scale:** pan is converted with `Options::touchpad_line_scroll_speed` (app
+  sets it to one list row) instead of `line_scroll_speed`, which the app raises
+  to 3 rows per *mouse-wheel* notch — mixing the two made pan race ~3× ahead of
+  the finger.
+- **Application (default, `Options::pan_pacing = false`):** the delta that
+  arrived since the last frame is applied in that frame — 1:1 tracking, no
+  backlog, so the content stays under the finger. `InputState::pan_momentum()`
+  therefore reports zero slip in this mode.
+- **Paced mode (`pan_pacing = true`, diagnostic A/B):** deltas fill
+  `pan_pending` and each frame hands out `velocity * dt` — an even stream that
+  trails the finger by the backlog. Selected with `SWIFT_PAN_PACING=1`.
+- **Lift detection:** the pad sends no "contacts up" message, so a gap in the
+  event stream is the only lift signal. The gate follows the observed cadence
+  (`pan_gap`: 1.6 × the smoothed inter-event gap, clamped to 35–100 ms) instead
+  of a fixed 100 ms, so a 30 Hz pad does not stall for three frames before the
+  coast starts.
+- **Momentum:** on the lift, the speed is measured over the last 80 ms of pad
+  reports (`release_velocity`), not taken from the per-frame low-pass: a finger
+  slows down before it leaves the glass, and the low-pass had already been
+  dragged down by those small reports, so a flick coasted far less than the
+  flick itself. It then coasts, decaying exponentially (τ = 0.3 s, capped at
+  5000 pt/s, stops below 30 pt/s). A slow crawl coasts a few pt, a hard flick
+  keeps flying. `wants_repaint_after` keeps frames flowing while coasting.
+- **Sign bug fixed:** the settle test was `velocity.max_elem().abs()`, and
+  `max_elem()` of a purely vertical pan is the *x* element, i.e. `0`. Any
+  downward-only pan therefore looked settled and had its velocity zeroed every
+  frame: momentum worked scrolling one way and vanished scrolling the other.
+  `velocity.abs().max_elem()` (also in `wants_repaint_after`) is the correct
+  test; `coast_works_in_both_directions` in `src/app.rs` guards it.
 
 Real wheel notches and Ctrl+wheel zoom are untouched.
 
 ### 4. Momentum read-out for the app's diagnostics (`src/input_state/mod.rs`)
 
-`InputState::pan_momentum()` exposes the pan velocity and the not-yet-applied
-backlog to the app. It is read only by the `SWIFT_EXPLORER_WHEELLOG` frame
-logger (`src/app.rs::perf_log`); no behaviour depends on it.
+`InputState::pan_momentum()` (velocity, not-yet-applied backlog), `pan_delta()`
+(this frame's pad delta) and `pan_events()` (how many pad reports were folded
+into it — more than one means the frame was late and the pad's reports piled up)
+expose the pan state to the app. They are read only by the
+`SWIFT_EXPLORER_WHEELLOG` frame logger (`src/app.rs::perf_log`); no behaviour
+depends on them.
+
 

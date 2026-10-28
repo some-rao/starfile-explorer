@@ -992,14 +992,18 @@ fn scroll_log_epoch() -> std::time::Instant {
     *T0.get_or_init(std::time::Instant::now)
 }
 
-/// Günlük dosyası (`%TEMP%\swift-wheel-log.txt`) süreç boyunca açık tutulur:
+/// Günlük dosyası (`%TEMP%\swift-wheel-<pid>.log`) süreç boyunca açık tutulur:
 /// her satırda dosyayı açıp kapatmak kare süresini ölçümün kendisiyle bozardı.
+///
+/// Dosya **süreç başına** açılır: iki örnek aynı anda çalıştığında (A/B
+/// karşılaştırması) tek dosyaya satır satır yazmak satırları birbirine
+/// karıştırıyordu (`PERF t=PERF t=5.1…`) ve ölçüm okunamaz hâle geliyordu.
 fn scroll_log_sink() -> Option<std::sync::MutexGuard<'static, Option<std::fs::File>>> {
     use std::io::Write as _;
     use std::sync::{Mutex, OnceLock};
     static SINK: OnceLock<Mutex<Option<std::fs::File>>> = OnceLock::new();
     let sink = SINK.get_or_init(|| {
-        let path = std::env::temp_dir().join("swift-wheel-log.txt");
+        let path = std::env::temp_dir().join(format!("swift-wheel-{}.log", std::process::id()));
         let mut f = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
@@ -1009,9 +1013,12 @@ fn scroll_log_sink() -> Option<std::sync::MutexGuard<'static, Option<std::fs::Fi
             // Çalıştırmaları ayır: her süreç kendi başlığını yazar.
             let _ = writeln!(
                 f,
-                "--- run swift-explorer {} animations={} ---",
+                "--- run swift-explorer {} animations={} pacing={} vsync={} pid={} ---",
                 env!("CARGO_PKG_VERSION"),
-                crate::system::animations()
+                crate::system::animations(),
+                std::env::var("SWIFT_PAN_PACING").is_ok_and(|v| v == "1"),
+                crate::system::vsync_enabled(),
+                std::process::id(),
             );
         }
         Mutex::new(f)
@@ -1020,7 +1027,7 @@ fn scroll_log_sink() -> Option<std::sync::MutexGuard<'static, Option<std::fs::Fi
 }
 
 /// Geçici ölçüm: SWIFT_EXPLORER_WHEELLOG=1 verildiğinde gelen kaydırma
-/// olaylarını (birim, değer, zaman) %TEMP%\swift-wheel-log.txt dosyasına
+/// olaylarını (birim, değer, zaman) %TEMP%\swift-wheel-&lt;pid&gt;.log dosyasına
 /// yazar. Dokunmatik hareketin hangi birimle ve ne boyutta geldiğini
 /// görmek için; temas sonunda kaldırılacak.
 fn wheel_log(ctx: &egui::Context) {
@@ -1075,6 +1082,10 @@ struct ScrollSample {
     /// Dokunmatik momentum: hız (pt/s) ve henüz uygulanmamış birikim (pt).
     velocity: egui::Vec2,
     pending: egui::Vec2,
+    /// Dokunmatik yüzeyin bu karede bildirdiği pan (pt); çark girişinde sıfır.
+    pan: egui::Vec2,
+    /// Bu karedeki panı oluşturan yüzey bildirim sayısı (1'den fazlaysa yığın).
+    pan_events: u32,
     pixels_per_point: f32,
 }
 
@@ -1113,6 +1124,7 @@ fn perf_log(
     let icon_q = images.pending();
     let live = scroll.raw != egui::Vec2::ZERO
         || scroll.smooth != egui::Vec2::ZERO
+        || scroll.pan != egui::Vec2::ZERO
         || scroll.velocity.length() > 0.5
         || scroll.pending.length() > 0.5;
     let odd = gap_ms.map(|g| g > 24.0).unwrap_or(false);
@@ -1140,9 +1152,10 @@ fn perf_log(
         Some(g) => format!("{g:>6.1}"),
         None => "  ---".to_string(),
     };
-    let _ = writeln!(
-        f,
-        "PERF t={t:.3} gap={gap} pre={pre_ms:>4.1} nav={tabnav_ms:>4.1} cmd={cmdstat_ms:>4.1} sbar={sidebar_ms:>4.1} pane={pane_ms:>4.1} ctr={center_ms:>4.1} post={post_ms:>4.1} wheel={} iconq={icon_q} off={:>8.2} vh={:>6.1} view={} ppp={:.2} rawy={:>8.2} smy={:>8.2} vely={:>8.1} pendy={:>8.1}",
+    // Satırın tamamı tek yazımla gider: aynı dosyaya yazan ikinci bir süreç
+    // olsa bile satırlar karakter karakter iç içe geçmez.
+    let line = format!(
+        "PERF t={t:.3} gap={gap} pre={pre_ms:>4.1} nav={tabnav_ms:>4.1} cmd={cmdstat_ms:>4.1} sbar={sidebar_ms:>4.1} pane={pane_ms:>4.1} ctr={center_ms:>4.1} post={post_ms:>4.1} wheel={} iconq={icon_q} off={:>8.2} vh={:>6.1} view={} ppp={:.2} rawy={:>8.2} smy={:>8.2} vely={:>8.1} pendy={:>8.1} pany={:>8.2} pev={}\n",
         scroll.raw != egui::Vec2::ZERO,
         scroll.offset,
         scroll.viewport,
@@ -1151,8 +1164,11 @@ fn perf_log(
         scroll.raw.y,
         scroll.smooth.y,
         scroll.velocity.y,
-        scroll.pending.y
+        scroll.pending.y,
+        scroll.pan.y,
+        scroll.pan_events,
     );
+    let _ = f.write_all(line.as_bytes());
 }
 
 fn apply_theme(ctx: &egui::Context, accent: Color32, theme: u8) {
@@ -1172,6 +1188,9 @@ fn apply_theme(ctx: &egui::Context, accent: Color32, theme: u8) {
         // bildirir; 1 "line" ≈ bir satır. Parmağın hızına birebir izler,
         // kalkınca momentum ile süzülür (vendored egui'deki momentum yaması).
         o.touchpad_line_scroll_speed = 28.0 * text_factor();
+        // Tanılama: SWIFT_PAN_PACING=1 eski (birikim güdümlü) pan hızını seçer.
+        // 1:1 sürükleme ile A/B karşılaştırması için; bkz. vendor/egui README.
+        o.pan_pacing = matches!(std::env::var("SWIFT_PAN_PACING").as_deref(), Ok("1"));
     });
     for t in [egui::Theme::Dark, egui::Theme::Light] {
         let dark = t == egui::Theme::Dark;
@@ -2619,7 +2638,17 @@ impl App {
 
 impl App {
     /// Kaydırma pompası durum yönetimi: harekette başlat, 400 ms sessizlikte durdur.
+    ///
+    /// Pompa yalnızca vsync kapalıyken gerekir: vsync açıkken kare ritmini
+    /// vblank verir ve egui `wants_repaint_after` ile her kareyi zaten ister.
     fn scroll_pump(&mut self, active: bool) {
+        if crate::system::vsync_enabled() {
+            if self.scroll_pump_on {
+                self.scroll_pump_on = false;
+                crate::system::scroll_pump_stop();
+            }
+            return;
+        }
         if active {
             if !self.scroll_pump_on {
                 self.scroll_pump_on = true;
@@ -8470,10 +8499,18 @@ impl eframe::App for App {
                     smooth: i.smooth_scroll_delta,
                     velocity,
                     pending,
+                    pan: i.pan_delta(),
+                    pan_events: i.pan_events(),
                     pixels_per_point: ppp,
                 },
             )
         });
+        // Kaydırma sürerken (parmak ya da momentum) kare ritmini garanti et:
+        // vsync açıkken ritmi vblank verir; kapalıyken bu zamanlayıcı ~125 Hz
+        // üst sınır koyar, böylece WM_TIMER pompası olmadan da akış sürer.
+        if scroll_motion || scroll_in.velocity.length() > 0.5 || scroll_in.pending.length() > 0.5 {
+            ctx.request_repaint_after(Duration::from_millis(8));
+        }
         if !scroll_motion {
             // Ayarları/sekmeleri değiştiyse arada bir kaydet (çökme veya zorla kapatmada kaybolmasın)
             if self.last_autosave.elapsed() > Duration::from_secs(3) {
@@ -8753,5 +8790,306 @@ impl eframe::App for App {
             t.cancel_search();
         }
         self.save_config();
+    }
+}
+
+#[cfg(test)]
+mod scroll_patch_tests {
+    //! `vendor/egui` kaydırma yamasının uygulamadan görünen sözleşmesi: hangi
+    //! delta pan sayılır, pan parmağı birebir izler mi, çark dişi çark mı kalır.
+    //! egui sürümü yükseltilip yama yeniden uygulanırken bu testler kırılırsa
+    //! kaydırma davranışı yanlış taşınmış demektir.
+
+    use egui::{vec2, Event, InputState, Modifiers, MouseWheelUnit, RawInput, Vec2};
+
+    fn options() -> egui::Options {
+        // `Options` has crate-private fields, so no struct-update syntax here.
+        let mut o = egui::Options::default();
+        o.touchpad_line_scroll_speed = 28.0;
+        o
+    }
+
+    fn pass(
+        state: InputState,
+        unit: MouseWheelUnit,
+        dy: f32,
+        options: &egui::Options,
+    ) -> InputState {
+        let raw = RawInput {
+            time: Some(0.016),
+            events: vec![Event::MouseWheel {
+                unit,
+                delta: vec2(0.0, dy),
+                modifiers: Modifiers::NONE,
+            }],
+            ..Default::default()
+        };
+        state.begin_pass(raw, false, 1.0, options)
+    }
+
+    /// Kesirli "line" = hassas dokunmatik yüzey; bir satır = 28 pt.
+    #[test]
+    fn fractional_wheel_line_pans_one_to_one() {
+        let o = options();
+        let s = pass(InputState::default(), MouseWheelUnit::Line, -0.5, &o);
+        assert_eq!(s.pan_delta(), vec2(0.0, -14.0));
+        // Aynı karede uygulanır: parmağın gerisinde birikim kalmaz.
+        assert_eq!(s.smooth_scroll_delta, vec2(0.0, -14.0));
+        assert_eq!(s.pan_momentum().1, Vec2::ZERO);
+    }
+
+    /// Piksel deltası bildiren sürücü de pan sayılır (çark dişi gibi sıçramaz).
+    #[test]
+    fn pixel_deltas_pan_one_to_one() {
+        let o = options();
+        let s = pass(InputState::default(), MouseWheelUnit::Point, 6.0, &o);
+        assert_eq!(s.pan_delta(), vec2(0.0, 6.0));
+        assert_eq!(s.smooth_scroll_delta, vec2(0.0, 6.0));
+    }
+
+    /// Tam sayı "line" = gerçek çark dişi: 28 pt birkaç karede süzülür.
+    #[test]
+    fn whole_wheel_notch_still_drains() {
+        let o = options();
+        let s = pass(InputState::default(), MouseWheelUnit::Line, -1.0, &o);
+        assert_eq!(s.pan_delta(), Vec2::ZERO);
+        assert!(s.smooth_scroll_delta.y < 0.0 && s.smooth_scroll_delta.y > -28.0);
+    }
+
+    /// Zamanı ilerleyen kare: momentum/kalkış kapısı ancak gerçek aralıklarla
+    /// çalışır (`time` sabit kalırsa `quiet` hiç true olmaz).
+    fn pass_at(
+        state: InputState,
+        t: f64,
+        deltas: &[(MouseWheelUnit, f32)],
+        options: &egui::Options,
+    ) -> InputState {
+        let events = deltas
+            .iter()
+            .map(|(unit, dy)| Event::MouseWheel {
+                unit: *unit,
+                delta: vec2(0.0, *dy),
+                modifiers: Modifiers::NONE,
+            })
+            .collect();
+        let raw = RawInput {
+            time: Some(t),
+            events,
+            ..Default::default()
+        };
+        state.begin_pass(raw, false, 1.0, options)
+    }
+
+    /// Savurmanın hızı kalkışta korunur: parmak yavaşlayıp kalktığında son
+    /// birkaç küçük bildirim alçak geçiren süzgeci aşağı çekiyordu, bu yüzden
+    /// süzülme savurmanın çok altında kalıyordu.
+    #[test]
+    fn fling_release_keeps_flick_speed() {
+        let o = options();
+        let mut s = InputState::default();
+        let mut t = 0.0;
+        // 10 kare boyunca 30 pt/kare ≈ 1800 pt/s savurma.
+        for _ in 0..10 {
+            t += 1.0 / 60.0;
+            s = pass_at(s, t, &[(MouseWheelUnit::Point, -30.0)], &o);
+        }
+        t += 0.05; // parmak kalktı: sessizlik kapısı aşıldı
+        s = pass_at(s, t, &[], &o);
+        let (velocity, _) = s.pan_momentum();
+        assert!(
+            velocity.y < -1500.0,
+            "kalkış hızı savurmayı korumalı, bulunan {velocity:?}"
+        );
+        // Süzülme gerçekten uygulanıyor (bu karede içerik hareket eder).
+        assert!(s.smooth_scroll_delta.y < -10.0);
+    }
+
+    /// Yavaşlayan kuyruk kalkış hızını gömmemeli: pencere son 80 ms'e bakar.
+    #[test]
+    fn decelerating_tail_still_coasts() {
+        let o = options();
+        let mut s = InputState::default();
+        let mut t = 0.0;
+        for _ in 0..8 {
+            t += 1.0 / 60.0;
+            s = pass_at(s, t, &[(MouseWheelUnit::Point, -30.0)], &o);
+        }
+        for _ in 0..3 {
+            t += 1.0 / 60.0;
+            s = pass_at(s, t, &[(MouseWheelUnit::Point, -6.0)], &o);
+        }
+        let pre_lift = s.pan_momentum().0;
+        t += 0.05;
+        s = pass_at(s, t, &[], &o);
+        let (velocity, _) = s.pan_momentum();
+        assert!(
+            velocity.y < pre_lift.y,
+            "pencere tahmini alçak geçirenden yüksek olmalı (önce {pre_lift:?}, sonra {velocity:?})"
+        );
+        assert!(velocity.y < -700.0, "süzülme belirgin olmalı: {velocity:?}");
+        assert!(s.smooth_scroll_delta.y < -5.0);
+    }
+
+    /// Yön asimetrisi regresyonu: hız yalnızca -y ise `max_elem()` 0 döndürüyor
+    /// ve `COAST_STOP` kontrolü hızı her karede sıfırlıyordu — süzülme aşağı
+    /// kaydırmada tümden kayboluyor, yukarı kaydırmada çalışıyordu.
+    #[test]
+    fn coast_works_in_both_directions() {
+        let o = options();
+        for sign in [-1.0_f32, 1.0] {
+            let mut s = InputState::default();
+            let mut t = 0.0;
+            for _ in 0..10 {
+                t += 1.0 / 60.0;
+                s = pass_at(s, t, &[(MouseWheelUnit::Point, 30.0 * sign)], &o);
+            }
+            t += 0.05;
+            s = pass_at(s, t, &[], &o);
+            let (velocity, _) = s.pan_momentum();
+            assert!(
+                velocity.y * sign > 1500.0,
+                "yön {sign}: kalkış hızı {velocity:?}"
+            );
+            assert!(
+                s.smooth_scroll_delta.y * sign > 10.0,
+                "yön {sign}: süzülme yok, delta {:?}",
+                s.smooth_scroll_delta
+            );
+        }
+    }
+
+    /// Bir karede birden çok yüzey bildirimi yığın demektir; tanılama bunu
+    /// sayar (ölçümde tek bildirim ile yığını ayırt etmek için).
+    #[test]
+    fn pan_event_count_reports_bursts() {
+        let o = options();
+        let s = pass_at(
+            InputState::default(),
+            0.016,
+            &[
+                (MouseWheelUnit::Point, -10.0),
+                (MouseWheelUnit::Point, -10.0),
+            ],
+            &o,
+        );
+        assert_eq!(s.pan_events(), 2);
+        assert_eq!(s.pan_delta(), vec2(0.0, -20.0));
+        assert_eq!(s.smooth_scroll_delta, vec2(0.0, -20.0));
+    }
+
+    #[test]
+    #[ignore = "tanılama: egui 0.31 kardeş Ui'lere aynı ui.id() verir (düzeltme bekliyor)"]
+    fn probe_sibling_pane_scroll_ids() {
+        let ctx = egui::Context::default();
+        let mut ids: Vec<egui::Id> = Vec::new();
+        for _ in 0..2 {
+            ids.clear();
+            let raw = RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1200.0, 800.0),
+                )),
+                ..Default::default()
+            };
+            let _ = ctx.run(raw, |ctx| {
+                egui::CentralPanel::default().show(ctx, |ui| {
+                    ui.horizontal_top(|ui| {
+                        for _p in [0u8, 1] {
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(500.0, 600.0),
+                                egui::Layout::top_down(egui::Align::Min),
+                                |ui| {
+                                    let out = egui::ScrollArea::vertical().show(ui, |ui| {
+                                        ui.label("x");
+                                    });
+                                    ids.push(out.id);
+                                },
+                            );
+                        }
+                    });
+                });
+            });
+        }
+        eprintln!("probe ids: {:?} {:?}", ids[0], ids[1]);
+        assert_ne!(ids[0], ids[1]);
+    }
+
+    fn clash_texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(t) => {
+                    let s = t.galley.text().to_owned();
+                    if s.contains("use of") {
+                        out.push(s);
+                    }
+                }
+                egui::Shape::Vec(v) => {
+                    for s in v {
+                        walk(s, out);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        for c in shapes {
+            walk(&c.shape, &mut out);
+        }
+        out
+    }
+
+    /// Yan panel (Ayrıntılar) ile Hızlı Önizleme penceresi aynı karede açıkken
+    /// kaydırma alanı kimlikleri çakışmamalı.
+    #[test]
+    #[ignore = "tanılama: Hızlı Önizleme + Ayrıntılar kimlik çakışması taraması"]
+    fn probe_quick_look_and_details_panel() {
+        let ctx = egui::Context::default();
+        let mut clashes = Vec::new();
+        for _ in 0..3 {
+            let raw = RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1600.0, 900.0),
+                )),
+                ..Default::default()
+            };
+            let out = ctx.run(raw, |ctx| {
+                egui::SidePanel::right("sidepane").show(ctx, |ui| {
+                    egui::ScrollArea::vertical()
+                        .auto_shrink(false)
+                        .show(ui, |ui| {
+                            ui.add_space(4.0);
+                            ui.label("Ayrintilar");
+                        });
+                });
+                egui::CentralPanel::default().show(ctx, |_ui| {});
+                egui::Window::new("ql")
+                    .id(egui::Id::new("quick_look"))
+                    .resizable(true)
+                    .show(ctx, |ui| {
+                        ui.set_min_height(600.0);
+                        ui.label("# Baslik");
+                    });
+            });
+            clashes = clash_texts(&out.shapes);
+            if !clashes.is_empty() {
+                break;
+            }
+        }
+        for c in &clashes {
+            eprintln!("{c}");
+        }
+        assert!(clashes.is_empty(), "id clash: {clashes:?}");
+    }
+
+    /// Tanılama modu: birikim korunur, kare başına hız kadar uygulanır.
+    #[test]
+    fn paced_mode_keeps_a_backlog() {
+        let mut o = options();
+        o.pan_pacing = true;
+        let s = pass(InputState::default(), MouseWheelUnit::Line, -0.5, &o);
+        assert_eq!(s.pan_delta(), vec2(0.0, -14.0));
+        assert!(s.smooth_scroll_delta.y > -14.0);
+        assert!(s.pan_momentum().1.y < 0.0);
     }
 }

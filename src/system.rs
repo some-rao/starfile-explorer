@@ -14,6 +14,20 @@ static HWND: AtomicIsize = AtomicIsize::new(0);
 /// Kaydırma pompası zamanlayıcısının kimliği (WM_TIMER wparam'ında görünür).
 pub const SCROLL_PUMP_ID: usize = 0x54C0;
 
+/// Dikey eşitleme açık mı? `SWIFT_VSYNC=0` kapatır (A/B ölçümü için).
+///
+/// Varsayılan açık: sunum vblank'a kilitlenir, kaydırma kareleri düzenli
+/// aralıklarla çıkar. Kapalıyken çizim döngüsü boşta döner ve `scroll_pump`
+/// WM_TIMER ile ~60 Hz ritmi verir (eski davranış).
+pub fn vsync_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| {
+        std::env::var("SWIFT_VSYNC")
+            .map(|v| v != "0")
+            .unwrap_or(true)
+    })
+}
+
 /// Ana pencere tutamacını kaydet; DWM çağrıları pencere oluştuktan sonra yapılabilir.
 pub fn set_hwnd(hwnd: isize) {
     HWND.store(hwnd, Ordering::Relaxed);

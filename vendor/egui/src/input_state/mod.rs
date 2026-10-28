@@ -17,6 +17,51 @@ pub use crate::Key;
 pub use touch_state::MultiTouchInfo;
 use touch_state::TouchState;
 
+/// Swift Explorer patch: how many pad samples the release-velocity tail keeps.
+/// Eight frames is ~130 ms at 60 Hz — longer than the 80 ms window actually
+/// used, so a stalled frame cannot empty the tail.
+const PAN_TAIL_LEN: usize = 8;
+
+/// Swift Explorer patch: speed at the moment the finger left the pad, from the
+/// last 80 ms of reported movement.
+///
+/// The per-frame low-pass (`pan_velocity`) is dragged down by the small reports
+/// a finger makes while it slows to lift, so a flick used to coast far less than
+/// the flick itself. A straight distance/time over the tail keeps the flick's
+/// speed, and ignores samples older than the window so a stale tail from a
+/// previous gesture cannot leak in.
+fn release_velocity(tail: &[(f64, Vec2); PAN_TAIL_LEN], at: usize) -> Option<Vec2> {
+    let count = at.min(PAN_TAIL_LEN);
+    if count < 2 {
+        return None;
+    }
+    let mut sum = Vec2::ZERO;
+    let mut used = 0;
+    let mut newest_t = f64::NEG_INFINITY;
+    let mut oldest_t = f64::NEG_INFINITY;
+    for back in 0..count {
+        let slot = (at + PAN_TAIL_LEN - 1 - back) % PAN_TAIL_LEN;
+        let (t, delta) = tail[slot];
+        if back == 0 {
+            newest_t = t;
+        }
+        if newest_t - t > 0.08 {
+            break;
+        }
+        oldest_t = t;
+        sum += delta;
+        used += 1;
+    }
+    let span = newest_t - oldest_t;
+    if used < 2 || span <= 0.0 {
+        return None;
+    }
+    // `span` covers `used - 1` report intervals; the movement in `sum` covers
+    // `used` of them.
+    let dt = span * used as f64 / (used - 1) as f64;
+    Some(sum / dt as f32)
+}
+
 /// Options for input state handling.
 #[derive(Clone, Debug, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Deserialize, serde::Serialize))]
@@ -160,11 +205,31 @@ pub struct InputState {
     /// Feeds the momentum coast after the finger lifts.
     pan_velocity: Vec2,
     /// Swift Explorer patch: paced-out pan distance not yet handed to scroll
-    /// areas. Touchpads emit deltas at ~30 Hz while frames render at 60 Hz;
-    /// handing everything in at once steps the motion at event cadence.
+    /// areas. Only used when [`Options::pan_pacing`] is on (diagnostic A/B);
+    /// in 1:1 mode this stays zero.
     pan_pending: Vec2,
+    /// Swift Explorer patch: touchpad pan distance reported by this frame's
+    /// events, already scaled to points (0 on frames without pad input).
+    pan_delta: Vec2,
     /// Swift Explorer patch: time of the last touchpad pan event.
     last_pan_time: f64,
+    /// Swift Explorer patch: smoothed gap between pan events, seconds. Used to
+    /// tell "finger lifted" from "finger paused" — the pad sends no
+    /// end-of-gesture message.
+    pan_gap: f64,
+    /// Swift Explorer patch: pad pan events seen this frame (diagnostics: tells
+    /// a smooth stream from a burst after a stalled frame).
+    pan_events: u32,
+    /// Swift Explorer patch: ring of the most recent (time, delta) pad samples.
+    /// The release velocity is measured over this tail; a per-frame low-pass
+    /// under-reads a fling, because the last few reports before the finger
+    /// leaves the glass are small.
+    pan_tail: [(f64, Vec2); PAN_TAIL_LEN],
+    /// Swift Explorer patch: next slot in [`Self::pan_tail`] (wrapping).
+    pan_tail_at: usize,
+    /// Swift Explorer patch: true while the momentum coast is running, so the
+    /// release velocity is taken exactly once per gesture.
+    pan_coasting: bool,
 
     // ----------------------------------------------
     /// Position and size of the egui area.
@@ -255,7 +320,13 @@ impl Default for InputState {
             zoom_factor_delta: 1.0,
             pan_velocity: Vec2::ZERO,
             pan_pending: Vec2::ZERO,
+            pan_delta: Vec2::ZERO,
             last_pan_time: f64::NEG_INFINITY,
+            pan_gap: 0.033,
+            pan_events: 0,
+            pan_tail: [(0.0, Vec2::ZERO); PAN_TAIL_LEN],
+            pan_tail_at: 0,
+            pan_coasting: false,
 
             screen_rect: Rect::from_min_size(Default::default(), vec2(10_000.0, 10_000.0)),
             pixels_per_point: 1.0,
@@ -312,6 +383,10 @@ impl InputState {
         let mut smooth_scroll_delta_for_zoom = 0.0;
         // Swift Explorer patch: pan deltas this frame, also fed to momentum.
         let mut touch_pan_delta = Vec2::ZERO;
+        // Swift Explorer patch: how many pad reports made up this frame's delta.
+        // A burst (several reports after a late frame) needs smoothing; a single
+        // report must be applied 1:1 or the finger slips.
+        let mut pan_events = 0_u32;
 
         for event in &mut new.events {
             match event {
@@ -334,16 +409,20 @@ impl InputState {
                     modifiers,
                 } => {
                     let raw = *delta;
-                    // Swift Explorer patch: a precision touchpad pan reports
-                    // *fractional* wheel lines continuously while the finger
-                    // glides; a mouse wheel notch reports whole lines. Pan
-                    // tracks the finger with its own (row-sized) scale and
-                    // gets momentum coasting — see README.
+                    // Swift Explorer patch: a precision touchpad pan arrives
+                    // either as pixel deltas (`Point`) or as *fractional* wheel
+                    // lines; a mouse wheel notch reports whole lines. Pan tracks
+                    // the finger with its own (row-sized) scale and gets
+                    // momentum coasting — see README.
                     let is_zoom = modifiers.ctrl || modifiers.mac_cmd || modifiers.command;
-                    let is_touch_pan =
-                        !is_zoom
-                            && *unit == MouseWheelUnit::Line
-                            && (raw.x.fract() != 0.0 || raw.y.fract() != 0.0);
+                    let is_touch_pan = !is_zoom
+                        && match unit {
+                            MouseWheelUnit::Point => true,
+                            MouseWheelUnit::Line => {
+                                raw.x.fract() != 0.0 || raw.y.fract() != 0.0
+                            }
+                            MouseWheelUnit::Page => false,
+                        };
 
                     let mut delta = match unit {
                         MouseWheelUnit::Point => raw,
@@ -380,10 +459,11 @@ impl InputState {
                             unprocessed_scroll_delta_for_zoom += delta.y;
                         }
                     } else if is_touch_pan {
-                        // Swift Explorer patch: pan is paced out evenly by the
-                        // pending/velocity block below — 1:1 with the finger,
-                        // spread across frames, with momentum on lift.
+                        // Swift Explorer patch: pan feeds the velocity/momentum
+                        // block below, which hands it to the scroll areas either
+                        // immediately (1:1) or paced (see `Options::pan_pacing`).
                         touch_pan_delta += delta;
+                        pan_events += 1;
                     } else {
                         if is_smooth {
                             smooth_scroll_delta += delta;
@@ -400,25 +480,29 @@ impl InputState {
         }
 
         {
-            // Swift Explorer patch: continuous touchpad pan motion + coasting.
+            // Swift Explorer patch: touchpad pan + momentum coasting.
             //
-            // The pad emits deltas at ~30 Hz while frames render at 60 Hz (or
-            // more); handing each batch straight to ScrollArea steps the
-            // motion at event cadence and looks jumpy. Instead the deltas fill
-            // `pan_pending`, and every frame hands out `velocity * dt` from
-            // it — motion spreads evenly across frames, tracks the finger's
-            // real speed, and after the finger lifts (events quiet) it keeps
-            // going as Explorer-style momentum with exponential decay.
+            // Two delivery modes (`Options::pan_pacing`, see README):
+            //  * 1:1 (default) — every delta that arrived since the last frame
+            //    is applied in this frame, so the content stays under the
+            //    finger. Momentum only runs once the pad goes quiet.
+            //  * paced — deltas fill `pan_pending` and each frame hands out
+            //    `velocity * dt`: an even 60 Hz stream that trails the finger
+            //    by the backlog. Kept as an A/B switch while tuning.
             const VEL_ALPHA: f32 = 0.4; // velocity smoothing per event frame
             const COAST_TAU: f32 = 0.30; // seconds of exponential decay
-            const COAST_QUIET: f64 = 0.10; // event silence before coasting, s
-            const COAST_STOP: f32 = 30.0; // stop below this speed, px/s
-            const COAST_MAX: f32 = 5000.0; // velocity cap, px/s
-            const PENDING_MAX: f32 = 800.0; // backlog cap, px
+            const COAST_STOP: f32 = 30.0; // stop below this speed, pt/s
+            const COAST_MAX: f32 = 5000.0; // velocity cap, pt/s
+            const PENDING_MAX: f32 = 800.0; // backlog cap, pt
 
-            if touch_pan_delta != Vec2::ZERO {
-                self.pan_pending += touch_pan_delta;
-                // Estimate instantaneous speed from this frame's deltas.
+            let panning = touch_pan_delta != Vec2::ZERO;
+            if panning {
+                // Speed estimate from this frame's deltas. The gap between
+                // events also sets the lift gate below (30 Hz pad vs 120 Hz).
+                let gap = time - self.last_pan_time;
+                if (0.001..0.5).contains(&gap) {
+                    self.pan_gap += (gap - self.pan_gap) * 0.3;
+                }
                 let dt = unstable_dt.clamp(0.005, 0.05);
                 let inst = touch_pan_delta / dt;
                 self.pan_velocity = self.pan_velocity + (inst - self.pan_velocity) * VEL_ALPHA;
@@ -427,30 +511,62 @@ impl InputState {
                     self.pan_velocity *= COAST_MAX / speed;
                 }
                 self.last_pan_time = time;
-            } else if time - self.last_pan_time > COAST_QUIET {
-                // Finger lifted or paused: coast out what's left.
+                self.pan_coasting = false;
+                self.pan_tail[self.pan_tail_at % PAN_TAIL_LEN] = (time, touch_pan_delta);
+                self.pan_tail_at = self.pan_tail_at.wrapping_add(1);
+            }
+
+            // Touchpads send no "contacts up" message: a gap in the stream is
+            // the only lift signal. Gate just above the observed cadence so a
+            // slow pad does not stall a whole 100 ms before the coast starts.
+            let quiet_after = (self.pan_gap * 1.6).clamp(0.035, 0.10);
+            let quiet = time - self.last_pan_time > quiet_after;
+            if !panning && quiet {
+                if !self.pan_coasting {
+                    // Lift: measure the speed over the tail instead of reusing
+                    // the low-pass, which had already been dragged down by the
+                    // small reports at the end of the flick.
+                    self.pan_coasting = true;
+                    if let Some(v) = release_velocity(&self.pan_tail, self.pan_tail_at) {
+                        self.pan_velocity = v;
+                    }
+                }
                 let decay = (-stable_dt / COAST_TAU).exp();
                 self.pan_velocity *= decay;
                 self.pan_pending *= decay;
             }
-            // Feed scroll areas evenly at the current speed.
-            let mut apply = self.pan_velocity * stable_dt;
-            for d in 0..2 {
-                let pending = self.pan_pending[d];
-                apply[d] = apply[d].clamp(-pending.abs(), pending.abs());
-                if pending.signum() * apply[d].signum() < 0.0 {
-                    // Stale backlog against the new direction; drop it.
-                    self.pan_pending[d] = 0.0;
-                } else {
-                    self.pan_pending[d] -= apply[d];
+
+            if options.pan_pacing {
+                if panning {
+                    self.pan_pending += touch_pan_delta;
                 }
+                // Feed scroll areas evenly at the current speed.
+                let mut apply = self.pan_velocity * stable_dt;
+                for d in 0..2 {
+                    let pending = self.pan_pending[d];
+                    apply[d] = apply[d].clamp(-pending.abs(), pending.abs());
+                    if pending.signum() * apply[d].signum() < 0.0 {
+                        // Stale backlog against the new direction; drop it.
+                        self.pan_pending[d] = 0.0;
+                    } else {
+                        self.pan_pending[d] -= apply[d];
+                    }
+                }
+                smooth_scroll_delta += apply;
+                // Keep the backlog bounded on very fast flings.
+                if self.pan_pending.length() > PENDING_MAX {
+                    self.pan_pending *= PENDING_MAX / self.pan_pending.length();
+                }
+            } else if panning {
+                // 1:1: no backlog, no lag — exactly what the pad reported.
+                smooth_scroll_delta += touch_pan_delta;
+                self.pan_pending = Vec2::ZERO;
+            } else if quiet {
+                smooth_scroll_delta += self.pan_velocity * stable_dt;
+                self.pan_pending = Vec2::ZERO;
             }
-            smooth_scroll_delta += apply;
-            // Keep the backlog bounded on very fast flings.
-            if self.pan_pending.length() > PENDING_MAX {
-                self.pan_pending *= PENDING_MAX / self.pan_pending.length();
-            }
-            if self.pan_velocity.max_elem().abs() <= COAST_STOP {
+
+            if self.pan_velocity.abs().max_elem() <= COAST_STOP {
                 self.pan_velocity = Vec2::ZERO; // fully settled
             }
         }
@@ -511,7 +627,13 @@ impl InputState {
             zoom_factor_delta,
             pan_velocity: self.pan_velocity,
             pan_pending: self.pan_pending,
+            pan_delta: touch_pan_delta,
             last_pan_time: self.last_pan_time,
+            pan_gap: self.pan_gap,
+            pan_events,
+            pan_tail: self.pan_tail,
+            pan_tail_at: self.pan_tail_at,
+            pan_coasting: self.pan_coasting,
 
             screen_rect,
             pixels_per_point,
@@ -593,6 +715,23 @@ impl InputState {
         (self.pan_velocity, self.pan_pending)
     }
 
+    /// Swift Explorer patch: touchpad pan distance reported by this frame's
+    /// events, already scaled to points (zero when the pad sent nothing).
+    /// Read by the app's scroll diagnostics (`SWIFT_EXPLORER_WHEELLOG`).
+    #[inline]
+    pub fn pan_delta(&self) -> Vec2 {
+        self.pan_delta
+    }
+
+    /// Swift Explorer patch: how many pad reports were folded into this frame's
+    /// [`Self::pan_delta`]. More than one means the frame arrived late and the
+    /// pad's reports piled up — the app logs this to tell even delivery from
+    /// bursts (`SWIFT_EXPLORER_WHEELLOG`).
+    #[inline]
+    pub fn pan_events(&self) -> u32 {
+        self.pan_events
+    }
+
     /// The [`crate::Context`] will call this at the end of each frame to see if we need a repaint.
     ///
     /// Returns how long to wait for a repaint.
@@ -601,7 +740,7 @@ impl InputState {
             || self.unprocessed_scroll_delta.abs().max_elem() > 0.2
             || self.unprocessed_scroll_delta_for_zoom.abs() > 0.2
             // Swift Explorer patch: while pan momentum coasts, keep painting.
-            || self.pan_velocity.max_elem().abs() > 0.5
+            || self.pan_velocity.abs().max_elem() > 0.5
             || self.pan_pending.abs().max_elem() > 0.5
             || !self.events.is_empty()
         {
@@ -1462,7 +1601,13 @@ impl InputState {
             input_options: _,
             pan_velocity: _,
             pan_pending: _,
+            pan_delta: _,
             last_pan_time: _,
+            pan_gap: _,
+            pan_events: _,
+            pan_tail: _,
+            pan_tail_at: _,
+            pan_coasting: _,
         } = self;
 
         ui.style_mut()
