@@ -363,4 +363,8 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Kapalı", "オフ"),
     ("Bölünmüş görünüm", "分割ビュー"),
     ("Bölünmüş görünümü kapat", "分割ビューを閉じる"),
+    ("Klasör içeriği", "フォルダーの内容"),
+    ("Yol", "パス"),
+    ("Önizleme hazırlanıyor…", "プレビューを準備しています…"),
+    ("Gömülü görüntüleyici kullanılamıyor", "埋め込みビューアーを使用できません"),
 ];

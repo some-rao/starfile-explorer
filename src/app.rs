@@ -482,12 +482,36 @@ struct Preview {
     data: Arc<Mutex<Option<(PathBuf, PreviewData)>>>,
 }
 
+impl Default for Preview {
+    fn default() -> Self {
+        Preview {
+            path: None,
+            data: Arc::new(Mutex::new(None)),
+        }
+    }
+}
+
 /// Yerleşik Hızlı Önizleme katmanı: veri arka planda okunur, katman kapanınca
 /// iş parçacığı sonucu yalnızca bellekte kalır (yeni açılışta yeniden okunur).
 struct QuickLook {
-    path: PathBuf,
-    data: Arc<Mutex<Option<(PathBuf, PreviewData)>>>,
-    started: bool,
+    entry: Entry,
+    store: Preview,
+}
+
+impl QuickLook {
+    fn new(entry: Entry) -> Self {
+        QuickLook {
+            entry,
+            store: Preview::default(),
+        }
+    }
+}
+
+/// Önizlemenin çizildiği yüzey: yan panel daha dar, Hızlı Önizleme katmanı daha geniş.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PvSurface {
+    Panel,
+    Overlay,
 }
 
 pub struct App {
@@ -569,6 +593,14 @@ pub struct App {
     type_time: Instant,
     toasts: Vec<(String, Instant, bool)>,
     preview: Preview,
+    /// Önizlemede seçili klasörün içeriği (arka planda okunur)
+    peek: HashMap<PathBuf, Arc<[Entry]>>,
+    peek_pending: std::collections::HashSet<PathBuf>,
+    peek_tx: std::sync::mpsc::Sender<(PathBuf, Vec<Entry>)>,
+    peek_rx: std::sync::mpsc::Receiver<(PathBuf, Vec<Entry>)>,
+    /// Bu karede gömülü görüntüleyicinin (WebView2) kaplaması istenen alan
+    web_want: Option<crate::webview::Want>,
+    web: crate::webview::WebView,
     ctrl_v_prev: bool,
     last_title: String,
     images: ImageCache,
@@ -589,6 +621,9 @@ pub struct App {
     marquee: Option<Pos2>,
     item_rects: Vec<(usize, Rect)>,
     grid_scroll: (f32, f32),
+    /// Ayrıntılar görünümünün son kaydırma konumu `(offset, görünür yükseklik)`.
+    /// Yalnızca kaydırma tanılaması için tutulur (bkz. `perf_log`).
+    details_scroll: (f32, f32),
     silent_jobs: Vec<usize>,
     /// Açık modern sağ tık menüsü
     menu: Option<MenuState>,
@@ -949,15 +984,47 @@ fn theme_accent(theme: u8) -> Color32 {
         .unwrap_or(Color32::from_rgb(0, 120, 212))
 }
 
+/// Kaydırma tanılamasının zaman ekseni: süreç başına tek başlangıç, böylece
+/// `wheel_log` olay satırları ile `perf_log` kare satırları aynı eksende olur.
+fn scroll_log_epoch() -> std::time::Instant {
+    use std::sync::OnceLock;
+    static T0: OnceLock<std::time::Instant> = OnceLock::new();
+    *T0.get_or_init(std::time::Instant::now)
+}
+
+/// Günlük dosyası (`%TEMP%\swift-wheel-log.txt`) süreç boyunca açık tutulur:
+/// her satırda dosyayı açıp kapatmak kare süresini ölçümün kendisiyle bozardı.
+fn scroll_log_sink() -> Option<std::sync::MutexGuard<'static, Option<std::fs::File>>> {
+    use std::io::Write as _;
+    use std::sync::{Mutex, OnceLock};
+    static SINK: OnceLock<Mutex<Option<std::fs::File>>> = OnceLock::new();
+    let sink = SINK.get_or_init(|| {
+        let path = std::env::temp_dir().join("swift-wheel-log.txt");
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .ok();
+        if let Some(f) = f.as_mut() {
+            // Çalıştırmaları ayır: her süreç kendi başlığını yazar.
+            let _ = writeln!(
+                f,
+                "--- run swift-explorer {} animations={} ---",
+                env!("CARGO_PKG_VERSION"),
+                crate::system::animations()
+            );
+        }
+        Mutex::new(f)
+    });
+    sink.lock().ok()
+}
+
 /// Geçici ölçüm: SWIFT_EXPLORER_WHEELLOG=1 verildiğinde gelen kaydırma
 /// olaylarını (birim, değer, zaman) %TEMP%\swift-wheel-log.txt dosyasına
 /// yazar. Dokunmatik hareketin hangi birimle ve ne boyutta geldiğini
 /// görmek için; temas sonunda kaldırılacak.
 fn wheel_log(ctx: &egui::Context) {
     use std::io::Write as _;
-    use std::sync::OnceLock;
-    use std::time::Instant;
-    static T0: OnceLock<Instant> = OnceLock::new();
 
     let events: Vec<(egui::MouseWheelUnit, egui::Vec2, bool)> = ctx.input(|i| {
         i.raw
@@ -974,35 +1041,55 @@ fn wheel_log(ctx: &egui::Context) {
     if events.is_empty() {
         return;
     }
-    let t0 = T0.get_or_init(Instant::now);
-    let path = std::env::temp_dir().join("swift-wheel-log.txt");
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    {
-        for (unit, delta, fract) in events {
-            let _ = writeln!(
-                f,
-                "{:>6} ms {:?} dx={:>8.3} dy={:>8.3} fract={}",
-                t0.elapsed().as_millis(),
-                unit,
-                delta.x,
-                delta.y,
-                fract
-            );
-        }
+    let t0 = scroll_log_epoch();
+    let Some(mut sink) = scroll_log_sink() else {
+        return;
+    };
+    let Some(f) = sink.as_mut() else {
+        return;
+    };
+    for (unit, delta, fract) in events {
+        let _ = writeln!(
+            f,
+            "{:>6} ms {:?} dx={:>8.3} dy={:>8.3} fract={}",
+            t0.elapsed().as_millis(),
+            unit,
+            delta.x,
+            delta.y,
+            fract
+        );
     }
 }
 
-/// Geçici ölçüm: kare aralığı, arayüz kurulum süresi ve ikon kuyruğu
-/// (SWIFT_EXPLORER_WHEELLOG=1). Kaydırma takıntısının çerçeve maliyetinden
-/// mi (dosya/ikon yükleme, disk yazımı) yoksa giriş kararkolundan mı
-/// geldiğini ayırt etmek için; tema sonunda kaldırılacak.
+/// Bir karenin kaydırma durumu; `perf_log` yalnızca günlük açıkken okur.
+#[derive(Clone, Copy)]
+struct ScrollSample {
+    /// Etkin listenin dikey offset'i ve görünür yüksekliği (pt).
+    offset: f32,
+    viewport: f32,
+    /// 0 = ayrıntılar, >0 = simge görünümü seviyesi.
+    view: usize,
+    /// Bu karede egui'nin ürettiği ham ve pürüzsüzleştirilmiş kaydırma (pt).
+    raw: egui::Vec2,
+    smooth: egui::Vec2,
+    /// Dokunmatik momentum: hız (pt/s) ve henüz uygulanmamış birikim (pt).
+    velocity: egui::Vec2,
+    pending: egui::Vec2,
+    pixels_per_point: f32,
+}
+
+/// Geçici ölçüm: kare aralığı, arayüz kurulum süresi, ikon kuyruğu ve
+/// kaydırma durumu (SWIFT_EXPLORER_WHEELLOG=1). Takılmanın çerçeve
+/// maliyetinden mi (dosya/ikon yükleme, disk yazımı) yoksa üretilen kare
+/// ritminden mi geldiğini ayırt etmek için; tema sonunda kaldırılacak.
+///
+/// Hareket sürerken **her** kare yazılır (kare aralığı dağılımı ve
+/// parmak→içerik kayması ancak tam iz ile ölçülür); hareketsizken yalnızca
+/// 24 ms'yi aşan kareler ile ikon kuyruğu (100 ms'de bir) yazılır.
 #[allow(clippy::too_many_arguments)]
 fn perf_log(
-    ctx: &egui::Context,
     images: &ImageCache,
+    scroll: &ScrollSample,
     pre_ms: f32,
     tabnav_ms: f32,
     cmdstat_ms: f32,
@@ -1011,6 +1098,7 @@ fn perf_log(
     center_ms: f32,
     post_ms: f32,
 ) {
+    use std::io::Write as _;
     use std::sync::Mutex;
     use std::time::Instant;
     static PREV: Mutex<Option<Instant>> = Mutex::new(None);
@@ -1022,10 +1110,13 @@ fn perf_log(
         .unwrap()
         .replace(now)
         .map(|p| now.duration_since(p).as_secs_f64() * 1000.0);
-    let wheel = ctx.input(|i| i.raw_scroll_delta != egui::Vec2::ZERO);
     let icon_q = images.pending();
+    let live = scroll.raw != egui::Vec2::ZERO
+        || scroll.smooth != egui::Vec2::ZERO
+        || scroll.velocity.length() > 0.5
+        || scroll.pending.length() > 0.5;
     let odd = gap_ms.map(|g| g > 24.0).unwrap_or(false);
-    let write = {
+    let due = {
         let mut next = NEXT.lock().unwrap();
         let due = next
             .map(|t| now.duration_since(t).as_millis() >= 100)
@@ -1033,29 +1124,35 @@ fn perf_log(
         if due {
             *next = Some(now);
         }
-        due && (wheel || odd || icon_q > 0)
+        due
     };
-    if !write {
+    if !(live || odd || (due && icon_q > 0)) {
         return;
     }
-    let path = std::env::temp_dir().join("swift-wheel-log.txt");
-    if let Ok(mut f) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path)
-    {
-        use std::io::Write as _;
-        let _ = match gap_ms {
-            Some(g) => writeln!(
-                f,
-                "PERF gap={g:>6.1} pre={pre_ms:>4.1} nav={tabnav_ms:>4.1} cmd={cmdstat_ms:>4.1} sbar={sidebar_ms:>4.1} pane={pane_ms:>4.1} ctr={center_ms:>4.1} post={post_ms:>4.1} wheel={wheel} iconq={icon_q}"
-            ),
-            None => writeln!(
-                f,
-                "PERF gap=  --- pre={pre_ms:>4.1} nav={tabnav_ms:>4.1} cmd={cmdstat_ms:>4.1} sbar={sidebar_ms:>4.1} pane={pane_ms:>4.1} ctr={center_ms:>4.1} post={post_ms:>4.1} wheel={wheel} iconq={icon_q}"
-            ),
-        };
-    }
+    let Some(mut sink) = scroll_log_sink() else {
+        return;
+    };
+    let Some(f) = sink.as_mut() else {
+        return;
+    };
+    let t = scroll_log_epoch().elapsed().as_secs_f64();
+    let gap = match gap_ms {
+        Some(g) => format!("{g:>6.1}"),
+        None => "  ---".to_string(),
+    };
+    let _ = writeln!(
+        f,
+        "PERF t={t:.3} gap={gap} pre={pre_ms:>4.1} nav={tabnav_ms:>4.1} cmd={cmdstat_ms:>4.1} sbar={sidebar_ms:>4.1} pane={pane_ms:>4.1} ctr={center_ms:>4.1} post={post_ms:>4.1} wheel={} iconq={icon_q} off={:>8.2} vh={:>6.1} view={} ppp={:.2} rawy={:>8.2} smy={:>8.2} vely={:>8.1} pendy={:>8.1}",
+        scroll.raw != egui::Vec2::ZERO,
+        scroll.offset,
+        scroll.viewport,
+        scroll.view,
+        scroll.pixels_per_point,
+        scroll.raw.y,
+        scroll.smooth.y,
+        scroll.velocity.y,
+        scroll.pending.y
+    );
 }
 
 fn apply_theme(ctx: &egui::Context, accent: Color32, theme: u8) {
@@ -1785,10 +1882,15 @@ fn fit_rect(tex: Vec2, b: Rect) -> Rect {
 }
 
 fn display_name(e: &Entry, show_ext: bool) -> String {
+    name_without_ext(e, show_ext).to_string()
+}
+
+/// `display_name`in ödünç alan sürümü: sütun ölçümü her satır için String ayırmasın.
+fn name_without_ext(e: &Entry, show_ext: bool) -> &str {
     if show_ext || e.is_dir || e.ext.is_empty() {
-        e.name.clone()
+        &e.name
     } else {
-        e.name[..e.name.len() - e.ext.len() - 1].to_string()
+        &e.name[..e.name.len() - e.ext.len() - 1]
     }
 }
 
@@ -1893,6 +1995,7 @@ impl App {
             .collect();
 
         let (git_tx, git_rx) = std::sync::mpsc::channel();
+        let (peek_tx, peek_rx) = std::sync::mpsc::channel();
 
         let app = App {
             tabs,
@@ -1954,6 +2057,12 @@ impl App {
                 path: None,
                 data: Arc::new(Mutex::new(None)),
             },
+            peek: HashMap::new(),
+            peek_pending: Default::default(),
+            peek_tx: peek_tx.clone(),
+            peek_rx,
+            web_want: None,
+            web: crate::webview::WebView::new(),
             ctrl_v_prev: false,
             last_title: String::new(),
             images: ImageCache::new(&ctx),
@@ -1972,6 +2081,7 @@ impl App {
             marquee: None,
             item_rects: vec![],
             grid_scroll: (0.0, 0.0),
+            details_scroll: (0.0, 0.0),
             silent_jobs: vec![],
             menu: None,
             saved_config: String::new(),
@@ -5773,6 +5883,75 @@ fn type_name_cached(map: &mut HashMap<String, String>, e: &Entry) -> String {
         .clone()
 }
 
+/// Önizleme verisini arka planda okur; aynı yol için yeniden okumaz.
+fn ensure_preview(store: &mut Preview, path: &Path, ctx: &egui::Context) {
+    if store.path.as_deref() == Some(path) {
+        return;
+    }
+    store.path = Some(path.to_path_buf());
+    *store.data.lock().unwrap() = None;
+    let data = store.data.clone();
+    let p = path.to_path_buf();
+    let ctx = ctx.clone();
+    std::thread::spawn(move || {
+        let d = fsutil::read_preview(&p);
+        *data.lock().unwrap() = Some((p, d));
+        ctx.request_repaint();
+    });
+}
+
+/// Metin/ofis önizlemesi için çerçeveli kaydırma alanı.
+fn text_frame(ui: &mut egui::Ui, max_h: f32, add: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::new()
+        .fill(ui.visuals().extreme_bg_color)
+        .corner_radius(6.0)
+        .inner_margin(8)
+        .show(ui, |ui| {
+            egui::ScrollArea::both()
+                .id_salt(ui.id().with("pv_scroll"))
+                .max_height(max_h)
+                .auto_shrink([false, true])
+                .show(ui, add);
+        });
+}
+
+/// Önizlenemeyen dosyalar için ayrıntı dökümü (Explorer'ın "Ayrıntılar" sekmesi gibi).
+fn metadata_block(ui: &mut egui::Ui, e: &Entry, type_name: &str, id: &egui::Id) {
+    let weak = ui.visuals().weak_text_color();
+    let value_w = (ui.available_width() - 96.0).max(80.0);
+    egui::Grid::new(id.with("meta"))
+        .num_columns(2)
+        .spacing([10.0, 5.0])
+        .max_col_width(value_w)
+        .show(ui, |ui| {
+            let row = |ui: &mut egui::Ui, k: &str, v: &str| {
+                ui.add(egui::Label::new(RichText::new(k).color(weak)).wrap());
+                ui.add(egui::Label::new(RichText::new(v)).wrap());
+                ui.end_row();
+            };
+            row(ui, crate::i18n::t("Ad"), &e.name);
+            row(ui, crate::i18n::t("Tür"), type_name);
+            if !e.is_dir {
+                row(ui, crate::i18n::t("Boyut"), &fsutil::format_size(e.size));
+            }
+            row(ui, crate::i18n::t("Değiştirme tarihi"), &e.time_label);
+            let created = fsutil::format_time(e.created);
+            if !created.is_empty() {
+                row(ui, crate::i18n::t("Olusturma"), &created);
+            }
+            row(ui, crate::i18n::t("Yol"), &e.path.display().to_string());
+        });
+}
+
+/// Arka plan okuması sürüyor: dönen gösterge + yeniden çizim isteği.
+fn busy(ui: &mut egui::Ui) {
+    ui.add_space(8.0);
+    ui.spinner();
+    // Sonuç geldiğinde iş parçacığı yeniden çizim ister; bu yalnızca emniyet ağı.
+    ui.ctx()
+        .request_repaint_after(std::time::Duration::from_millis(100));
+}
+
 fn drop_target_p(
     painter: &egui::Painter,
     resp: &egui::Response,
@@ -6110,6 +6289,7 @@ impl App {
             sort,
             asc,
             item_rects,
+            details_scroll,
             remember_views,
             git_column,
             pane_no,
@@ -6164,12 +6344,32 @@ impl App {
             * (2.0 + show_type as i32 as f32 + in_search as i32 as f32 + show_git as i32 as f32);
         let loc_w = if in_search { w_loc } else { 0.0 };
         let git_w = if show_git { w_git } else { 0.0 };
-        // Ad sütunu önceliklidir (Explorer'da da öyle): tablonun ~%42'si. Tür sütunu
-        // içeriğine sığdığı kadar yer alır, artan yer ada geri döner.
-        let mut w_name = (table_w * 0.42).clamp(220.0, 900.0);
-        let w_type = (table_w - w_name - w_date - w_size - loc_w - git_w - gaps)
-            .clamp(110.0, w_type_max.max(110.0));
-        w_name = (table_w - w_type - w_date - w_size - loc_w - git_w - gaps).clamp(180.0, 900.0);
+        // Ad sütunu içeriğe göre ölçülür: en uzun adlar yazı tipiyle ölçülür ve
+        // 220–460 px arasında tutulur. Artan yer sağdaki boşluk sütununa gider;
+        // böylece Tür/Tarih/Boyut adın hemen yanında başlar (Explorer düzeni).
+        let w_name = {
+            // Yalnızca en uzun dört ad ölçülür; her karede binlerce adı
+            // yazı tipiyle ölçmek kaydırmayı yavaşlatırdı.
+            let mut cand: Vec<&str> = Vec::with_capacity(4);
+            for &idx in t.view.iter().take(4000) {
+                let s = name_without_ext(&t.entries[idx], show_ext);
+                let n = s.chars().count();
+                if cand.len() < 4 {
+                    cand.push(s);
+                } else if n > cand[3].chars().count() {
+                    cand[3] = s;
+                } else {
+                    continue;
+                }
+                cand.sort_by_key(|s| std::cmp::Reverse(s.chars().count()));
+            }
+            let longest = cand.iter().map(|s| px(s)).fold(0.0_f32, f32::max);
+            (longest + 34.0).clamp(220.0, 460.0)
+        };
+        let w_type = w_type_max.clamp(110.0, (table_w * 0.50).max(160.0));
+        // Dar bölmede sütunlar taşmasın: önce addan kıs.
+        let fixed = w_date + w_size + if show_type { w_type } else { 0.0 } + loc_w + git_w + gaps;
+        let w_name = w_name.min((table_w - fixed).max(150.0));
 
         // İlk karede panel genişliği henüz oturmamış olur (yan paneller çizilmemiş);
         // sütun genişlikleri o karede oluşursa çarpık değerler kalıcılaşır. Bu yüzden
@@ -6299,7 +6499,7 @@ impl App {
             }
         };
         let mut head_cells: Vec<Rect> = Vec::new();
-        table
+        let out = table
             .header(28.0, |mut h| {
                 let mut head = |h: &mut egui_extras::TableRow,
                                 label: &str,
@@ -6339,12 +6539,12 @@ impl App {
                     &mut h,
                     crate::i18n::t("Değiştirme tarihi"),
                     Some(SortKey::Modified),
-                    true,
+                    false,
                 );
                 if show_type {
-                    head(&mut h, crate::i18n::t("Tür"), Some(SortKey::Type), true);
+                    head(&mut h, crate::i18n::t("Tür"), Some(SortKey::Type), false);
                 }
-                head(&mut h, crate::i18n::t("Boyut"), Some(SortKey::Size), true);
+                head(&mut h, crate::i18n::t("Boyut"), Some(SortKey::Size), false);
                 // Sağdaki boşluk sütunu
                 h.col(|_ui| {});
             })
@@ -6492,35 +6692,33 @@ impl App {
                         });
                     }
                     row.col(|ui| {
-                        // Başlık sağa yaslı; değer de aynı sağ kenara oturmalı.
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            ui.label(RichText::new(e.time_label.as_str()).color(weak));
-                        });
+                        // Tarih, tür ve boyut sol hizalı: değer sütunun sol kenarında,
+                        // başlıkla aynı hizada başlar (Explorer'ın sol hizalı düzeni).
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(e.time_label.as_str()).color(weak));
                     });
                     if show_type {
                         row.col(|ui| {
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(type_name_cached(type_names, &e)).color(weak),
-                                    )
-                                    .truncate(),
-                                );
-                            });
+                            ui.add_space(4.0);
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(type_name_cached(type_names, &e)).color(weak),
+                                )
+                                .truncate(),
+                            );
                         });
                     }
                     row.col(|ui| {
-                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                            let s = if e.is_dir {
-                                dir_sizes
-                                    .get(&e.path)
-                                    .map(|s| fsutil::format_size(*s))
-                                    .unwrap_or_default()
-                            } else {
-                                fsutil::format_size(e.size)
-                            };
-                            ui.label(RichText::new(s).color(weak));
-                        });
+                        ui.add_space(4.0);
+                        let s = if e.is_dir {
+                            dir_sizes
+                                .get(&e.path)
+                                .map(|s| fsutil::format_size(*s))
+                                .unwrap_or_default()
+                        } else {
+                            fsutil::format_size(e.size)
+                        };
+                        ui.label(RichText::new(s).color(weak));
                     });
                     // Sağdaki boşluk sütunu
                     row.col(|_ui| {});
@@ -6550,6 +6748,9 @@ impl App {
                     }
                 });
             });
+
+        // Tanılama: ayrıntılar listesinin offset'i ve görünür yüksekliği.
+        *details_scroll = (out.state.offset.y, out.inner_rect.height());
 
         // Sütun ayırıcıları yalnızca başlık satırında: Explorer'da da listenin
         // içinden çizgi geçmez, etiketler arasında kısa bir çizgi görünür.
@@ -6886,7 +7087,7 @@ impl App {
     }
 
     /// Önizleme bölmesi: yalnızca içerik (görsel küçük resim, metin önizleme)
-    fn preview_panel(&mut self, ui: &mut egui::Ui) {
+    fn preview_panel(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         let (sel, home) = {
             let t = &self.tabs[self.active];
             let sel: Vec<Entry> = t.selected_entries().into_iter().cloned().collect();
@@ -6896,186 +7097,53 @@ impl App {
             .auto_shrink(false)
             .show(ui, |ui| {
                 ui.add_space(8.0);
-                let e = if home || sel.len() > 1 {
-                    None
-                } else {
-                    sel.first().cloned()
-                };
-                let Some(e) = e else {
+                if sel.len() > 1 {
                     ui.vertical_centered(|ui| {
-                        if sel.len() > 1 {
-                            ui.label(icon_rt("📚").size(48.0));
-                            ui.label(crate::i18n::tf("{} öğe seçildi", &[&sel.len()]));
-                        }
+                        ui.label(icon_rt("📚").size(48.0));
+                        ui.label(crate::i18n::tf("{} öğe seçildi", &[&sel.len()]));
+                    });
+                    return;
+                }
+                let Some(e) = sel.first().filter(|_| !home).cloned() else {
+                    ui.vertical_centered(|ui| {
                         ui.label(
                             RichText::new(crate::i18n::t("Önizlemek için bir öğe seçin.")).weak(),
                         )
                     });
                     return;
                 };
-                let path = e.path.clone();
-                // Sanal konumlarda ham CLSID yerine görünen ad (Galeri, Giriş…)
-                let title = if crate::tab::is_virtual(&path) {
-                    self.loc_name(&path)
-                } else {
-                    path_label(&path)
-                };
-                let ctx = ui.ctx().clone();
-                let px = icon_px(&ctx, 200.0);
-                let thumb = !e.is_dir && fsutil::has_thumbnail(&e.ext);
-                let key = if thumb {
-                    format!("t{px}:{}", path.display())
-                } else {
-                    icon_key(&path, e.is_dir, &e.ext, px, e.plain_dir)
-                };
-                ui.vertical_centered(|ui| {
-                    let (rect, _) = ui.allocate_exact_size(
-                        egui::vec2(ui.available_width().min(260.0), 200.0),
-                        Sense::hover(),
-                    );
-                    if let Img::Ready(tex) = self.images.get(&key, &path, px, !thumb) {
-                        let r = fit_rect(tex.size_vec2(), rect);
-                        ui.painter().image(
-                            tex.id(),
-                            r,
-                            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                            Color32::WHITE,
-                        );
-                    }
-                    ui.add_space(6.0);
-                    ui.add(egui::Label::new(RichText::new(title).size(17.0).strong()).wrap());
-                });
-                // Metin önizlemesi (arka planda okunur); küçük resimli türler ve klasörler
-                // içerik önizlemez, diğer türler için yer tutucu göster
-                if e.is_dir || thumb || e.size == 0 {
-                    ui.add_space(10.0);
-                    ui.vertical_centered(|ui| {
-                        ui.label(RichText::new(crate::i18n::t("Bu tür için önizleme yok.")).weak())
-                    });
-                    return;
-                }
-                if self.preview.path.as_ref() != Some(&e.path) {
-                    self.preview.path = Some(e.path.clone());
-                    *self.preview.data.lock().unwrap() = None;
-                    let store = self.preview.data.clone();
-                    let p = e.path.clone();
-                    std::thread::spawn(move || {
-                        let d = fsutil::read_preview(&p);
-                        *store.lock().unwrap() = Some((p, d));
-                        ctx.request_repaint();
-                    });
-                }
-                let data = self.preview.data.lock().unwrap();
-                if let Some((p, PreviewData::Error(err))) = data.as_ref() {
-                    if p == &e.path {
-                        ui.add_space(10.0);
-                        ui.label(
-                            RichText::new(crate::i18n::tf("Önizleme yapılamadı: {}", &[&err]))
-                                .weak(),
-                        );
-                    }
-                }
-                if let Some((pp, PreviewData::Text(s))) = data.as_ref() {
-                    if pp == &e.path {
-                        ui.add_space(10.0);
-                        ui.label(RichText::new(crate::i18n::t("Önizleme")).weak());
-                        ui.separator();
-                        let colors = code_colors(ui, self.accent);
-                        let is_md = is_markdown_ext(&e.ext);
-                        let lang = if self.highlight {
-                            crate::highlight::Lang::from_path(&e.path)
-                        } else {
-                            None
-                        };
-                        egui::Frame::new()
-                            .fill(ui.visuals().extreme_bg_color)
-                            .corner_radius(6.0)
-                            .inner_margin(8)
-                            .show(ui, |ui| {
-                                egui::ScrollArea::both()
-                                    .max_height(420.0)
-                                    .auto_shrink([false, true])
-                                    .show(ui, |ui| {
-                                        if is_md {
-                                            ui.set_width(ui.available_width());
-                                            crate::markdown::render(
-                                                ui,
-                                                s,
-                                                &crate::markdown::Md {
-                                                    c: colors,
-                                                    size: text_size(14.0),
-                                                },
-                                            );
-                                        } else {
-                                            let job = crate::highlight::job(
-                                                lang,
-                                                s,
-                                                text_size(12.5),
-                                                colors,
-                                            );
-                                            ui.add(egui::Label::new(job).extend());
-                                        }
-                                    });
-                            });
-                    }
-                }
+                // Veri deposu ödünç alınırken gövde `&mut self` kullanabilsin diye
+                // geçici olarak dışarı alınır, sonra geri konur.
+                let mut store = std::mem::take(&mut self.preview);
+                self.preview_body(ui, &e, &mut store, PvSurface::Panel, actions);
+                self.preview = store;
             });
     }
 
-    /// Boşluk: seçili dosyayı yerleşik katmanda önizle.
+    /// Boşluk: seçili öğeyi (dosya ya da klasör) yerleşik katmanda önizle.
     fn open_quick_look(&mut self) {
         let Some(entry) = self.tab().selected_entries().into_iter().next().cloned() else {
             return;
         };
-        if entry.is_dir {
-            return;
-        }
-        self.quick = Some(QuickLook {
-            path: entry.path,
-            data: Arc::new(Mutex::new(None)),
-            started: false,
-        });
+        self.quick = Some(QuickLook::new(entry));
     }
 
-    /// Yerleşik Hızlı Önizleme katmanı: görsel ya da renklendirilmiş metin.
-    fn quick_look_ui(&mut self, ctx: &egui::Context) {
-        let Some(ql) = self.quick.as_ref() else {
+    /// Yerleşik Hızlı Önizleme katmanı: yan panelin aynı gövdesi, daha büyük.
+    fn quick_look_ui(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        let Some(mut ql) = self.quick.take() else {
             return;
         };
-        let path = ql.path.clone();
-        let data = ql.data.clone();
-        let started = ql.started;
         // Liste seçimi değiştiyse katman da onu izler (ok tuşlarıyla gezinme).
-        let sel = {
-            let t = &self.tabs[self.active];
-            t.selected_entries().into_iter().next().cloned()
-        };
+        let sel = self.tabs[self.active]
+            .selected_entries()
+            .first()
+            .cloned()
+            .cloned();
         if let Some(e) = sel {
-            if e.path != path {
-                self.quick = if e.is_dir {
-                    None
-                } else {
-                    Some(QuickLook {
-                        path: e.path,
-                        data: Arc::new(Mutex::new(None)),
-                        started: false,
-                    })
-                };
+            if e.path != ql.entry.path {
+                self.quick = Some(QuickLook::new(e));
                 return;
             }
-        }
-        if !started {
-            if let Some(q) = self.quick.as_mut() {
-                q.started = true;
-            }
-            let store = data.clone();
-            let p = path.clone();
-            let ctx2 = ctx.clone();
-            std::thread::spawn(move || {
-                let d = fsutil::read_preview(&p);
-                *store.lock().unwrap() = Some((p, d));
-                ctx2.request_repaint();
-            });
         }
         let mut open = true;
         let mut close = ctx.input(|i| i.key_pressed(egui::Key::Escape));
@@ -7084,12 +7152,12 @@ impl App {
             (screen.width() * 0.68).clamp(360.0, 1100.0),
             (screen.height() * 0.74).clamp(260.0, 900.0),
         );
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-        egui::Window::new(path_label(&path))
+        let title = if crate::tab::is_virtual(&ql.entry.path) {
+            self.loc_name(&ql.entry.path)
+        } else {
+            path_label(&ql.entry.path)
+        };
+        egui::Window::new(title)
             .id(egui::Id::new("quick_look"))
             .open(&mut open)
             .resizable(true)
@@ -7098,73 +7166,343 @@ impl App {
             .default_pos(screen.center() - size * 0.5)
             .show(ctx, |ui| {
                 ui.set_min_height(size.y - 60.0);
-                if fsutil::has_thumbnail(&ext) {
-                    let px = icon_px(ui.ctx(), 900.0);
-                    let key = format!("t{px}:{}", path.display());
-                    let (rect, _) = ui.allocate_exact_size(
-                        egui::vec2(ui.available_width(), ui.available_height().max(120.0)),
-                        Sense::hover(),
-                    );
-                    if let Img::Ready(tex) = self.images.get(&key, &path, px, false) {
-                        let r = fit_rect(tex.size_vec2(), rect);
-                        ui.painter().image(
-                            tex.id(),
-                            r,
-                            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                            Color32::WHITE,
-                        );
-                    }
-                    return;
-                }
-                let colors = code_colors(ui, self.accent);
-                let lang = if self.highlight {
-                    crate::highlight::Lang::from_path(&path)
-                } else {
-                    None
-                };
-                let d = data.lock().unwrap();
-                match d.as_ref() {
-                    Some((p, PreviewData::Text(s))) if p == &path => {
-                        egui::ScrollArea::both()
-                            .auto_shrink([false, false])
-                            .show(ui, |ui| {
-                                if is_markdown_ext(&ext) {
-                                    ui.set_width(ui.available_width());
-                                    crate::markdown::render(
-                                        ui,
-                                        s,
-                                        &crate::markdown::Md {
-                                            c: colors,
-                                            size: text_size(14.0),
-                                        },
-                                    );
-                                } else {
-                                    let job =
-                                        crate::highlight::job(lang, s, text_size(13.0), colors);
-                                    ui.add(egui::Label::new(job).extend());
-                                }
-                            });
-                    }
-                    Some((p, PreviewData::Error(err))) if p == &path => {
-                        ui.label(
-                            RichText::new(crate::i18n::tf("Önizleme yapılamadı: {}", &[err]))
-                                .weak(),
-                        );
-                    }
-                    Some((p, PreviewData::Binary)) if p == &path => {
-                        ui.label(RichText::new(crate::i18n::t("Bu tür için önizleme yok.")).weak());
-                    }
-                    _ => {
-                        ui.spinner();
-                        ui.ctx().request_repaint();
-                    }
-                }
+                self.preview_body(ui, &ql.entry, &mut ql.store, PvSurface::Overlay, actions);
             });
         if !open {
             close = true;
         }
         if close {
             self.quick = None;
+        } else {
+            self.quick = Some(ql);
+        }
+    }
+
+    /// Yan panel ile Hızlı Önizleme katmanının ortak gövdesi.
+    ///
+    /// Klasörler için başlık, öğe sayıları ve içerik listesi; PDF/video/ses için
+    /// gömülü görüntüleyici; ofis belgeleri için metin; geri kalan dosyalar için
+    /// meta veri dökümü gösterilir.
+    fn preview_body(
+        &mut self,
+        ui: &mut egui::Ui,
+        e: &Entry,
+        store: &mut Preview,
+        surf: PvSurface,
+        actions: &mut Vec<Action>,
+    ) {
+        let ctx = ui.ctx().clone();
+        let weak = ui.visuals().weak_text_color();
+        let sid = ui.id().with("pv");
+        // Sanal konumlarda ham CLSID yerine görünen ad (Galeri, Giriş…)
+        let title = if crate::tab::is_virtual(&e.path) {
+            self.loc_name(&e.path)
+        } else {
+            e.name.clone()
+        };
+        let type_name = type_name_cached(&mut self.type_names, e);
+        let media = if e.is_dir {
+            None
+        } else {
+            crate::media::of_ext(&e.ext)
+        };
+        let office = !e.is_dir && crate::ooxml::is_office(&e.ext);
+        let panel = surf == PvSurface::Panel;
+        let hero_h = if panel { 200.0 } else { 260.0 };
+        let px = icon_px(&ctx, if panel { 200.0 } else { 480.0 });
+        let thumb = !e.is_dir && (fsutil::has_thumbnail(&e.ext) || office);
+        let key = if thumb {
+            format!("t{px}:{}", e.path.display())
+        } else {
+            icon_key(&e.path, e.is_dir, &e.ext, px, e.plain_dir)
+        };
+        ui.vertical_centered(|ui| {
+            let w = if panel {
+                ui.available_width().min(280.0)
+            } else {
+                ui.available_width().min(560.0)
+            };
+            // Medyanın oynatıcısı hazır olduğunda büyük küçük resim gösterilmez.
+            if media.is_none() || !self.media_ready(media) {
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(w, hero_h), Sense::hover());
+                if let Img::Ready(tex) = self.images.get(&key, &e.path, px, !thumb) {
+                    let r = fit_rect(tex.size_vec2(), rect);
+                    ui.painter().image(
+                        tex.id(),
+                        r,
+                        Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                        Color32::WHITE,
+                    );
+                }
+            }
+            ui.add_space(6.0);
+            // Explorer dosya adını kalın çizmez.
+            ui.add(egui::Label::new(RichText::new(title).size(17.0)).wrap());
+            let sub = if e.is_dir {
+                type_name.clone()
+            } else {
+                format!("{} · {}", type_name, fsutil::format_size(e.size))
+            };
+            ui.add(egui::Label::new(RichText::new(sub).size(text_size(12.0)).color(weak)).wrap());
+        });
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.add_space(2.0);
+            if ui.button(crate::i18n::t("Aç")).clicked() {
+                actions.push(Action::OpenEntry(e.path.clone(), e.is_dir));
+            }
+            if !e.is_dir && ui.button(crate::i18n::t("Birlikte aç…")).clicked() {
+                actions.push(Action::OpenWith(e.path.clone()));
+            }
+        });
+        ui.add_space(4.0);
+
+        if e.is_dir {
+            self.folder_preview(ui, e, surf);
+            return;
+        }
+        if let Some(k) = media {
+            self.media_preview(ui, e, k, surf);
+            return;
+        }
+        if office {
+            ensure_preview(store, &e.path, &ctx);
+            let data = store.data.lock().unwrap();
+            match data.as_ref() {
+                Some((p, PreviewData::Office(s))) if p == &e.path => {
+                    let max_h = if panel {
+                        420.0
+                    } else {
+                        (ui.available_height() - 12.0).max(240.0)
+                    };
+                    text_frame(ui, max_h, |ui| {
+                        ui.add(egui::Label::new(
+                            egui::RichText::new(s).monospace().size(text_size(12.5)),
+                        ));
+                    });
+                }
+                Some((p, PreviewData::Error(err))) if p == &e.path => {
+                    ui.label(
+                        RichText::new(crate::i18n::tf("Önizleme yapılamadı: {}", &[err])).weak(),
+                    );
+                    ui.add_space(6.0);
+                    metadata_block(ui, e, &type_name, &sid);
+                }
+                Some((p, _)) if p == &e.path => metadata_block(ui, e, &type_name, &sid),
+                _ => busy(ui),
+            }
+            return;
+        }
+        // Küçük resmi olan görseller: büyük görsel yeterli, altına meta veri.
+        if thumb {
+            metadata_block(ui, e, &type_name, &sid);
+            return;
+        }
+        if e.size == 0 {
+            metadata_block(ui, e, &type_name, &sid);
+            return;
+        }
+        ensure_preview(store, &e.path, &ctx);
+        let data = store.data.lock().unwrap();
+        match data.as_ref() {
+            Some((p, PreviewData::Text(s))) if p == &e.path => {
+                let colors = code_colors(ui, self.accent);
+                let is_md = is_markdown_ext(&e.ext);
+                let lang = if self.highlight {
+                    crate::highlight::Lang::from_path(&e.path)
+                } else {
+                    None
+                };
+                let max_h = if panel {
+                    420.0
+                } else {
+                    (ui.available_height() - 12.0).max(240.0)
+                };
+                text_frame(ui, max_h, |ui| {
+                    if is_md {
+                        ui.set_width(ui.available_width());
+                        crate::markdown::render(
+                            ui,
+                            s,
+                            &crate::markdown::Md {
+                                c: colors,
+                                size: text_size(14.0),
+                            },
+                        );
+                    } else {
+                        let job = crate::highlight::job(lang, s, text_size(12.5), colors);
+                        ui.add(egui::Label::new(job).extend());
+                    }
+                });
+            }
+            Some((p, PreviewData::Error(err))) if p == &e.path => {
+                ui.label(RichText::new(crate::i18n::tf("Önizleme yapılamadı: {}", &[err])).weak());
+                ui.add_space(6.0);
+                metadata_block(ui, e, &type_name, &sid);
+            }
+            Some((p, _)) if p == &e.path => {
+                metadata_block(ui, e, &type_name, &sid);
+            }
+            _ => busy(ui),
+        }
+    }
+
+    /// Gömülü görüntüleyici (WebView2) bu türü gösterebiliyor mu?
+    fn media_ready(&self, media: Option<crate::media::MediaKind>) -> bool {
+        media.is_some() && self.web.ready()
+    }
+
+    /// PDF, video ve ses: gömülü görüntüleyici; hazır değilse küçük resim/meta veri.
+    fn media_preview(
+        &mut self,
+        ui: &mut egui::Ui,
+        e: &Entry,
+        kind: crate::media::MediaKind,
+        surf: PvSurface,
+    ) {
+        if self.web.ready() {
+            let h = match (surf, kind) {
+                (_, crate::media::MediaKind::Audio) => 96.0,
+                (PvSurface::Panel, _) => (ui.available_height() - 8.0).clamp(160.0, 420.0),
+                (PvSurface::Overlay, _) => (ui.available_height() - 8.0).max(200.0),
+            };
+            let (rect, _) =
+                ui.allocate_exact_size(egui::vec2(ui.available_width(), h), Sense::hover());
+            self.web_want = Some(crate::webview::Want {
+                path: e.path.clone(),
+                kind,
+                rect,
+                overlay: surf == PvSurface::Overlay,
+            });
+            return;
+        }
+        // WebView2 henüz hazırlanıyor: alan ayrılır (yerleşim zıplamasın), istek
+        // yine gönderilir ki ortam oluşturulsun; altında meta veri gösterilir.
+        let weak = ui.visuals().weak_text_color();
+        let failed = self.web.failed();
+        let h = match (surf, kind) {
+            (_, crate::media::MediaKind::Audio) => 96.0,
+            (PvSurface::Panel, _) => 200.0,
+            (PvSurface::Overlay, _) => 260.0,
+        };
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), h), Sense::hover());
+        if !failed {
+            self.web_want = Some(crate::webview::Want {
+                path: e.path.clone(),
+                kind,
+                rect,
+                overlay: surf == PvSurface::Overlay,
+            });
+        }
+        ui.add_space(4.0);
+        let note = if failed {
+            crate::i18n::t("Gömülü görüntüleyici kullanılamıyor")
+        } else {
+            crate::i18n::t("Önizleme hazırlanıyor…")
+        };
+        ui.label(RichText::new(note).size(text_size(12.0)).color(weak));
+        if !failed {
+            // Tamamlanma geri çağrısı da yeniden çizim ister; yine de emniyet için.
+            ui.ctx()
+                .request_repaint_after(std::time::Duration::from_millis(250));
+        }
+        if surf == PvSurface::Panel {
+            let sid = ui.id().with("pv");
+            let tn = type_name_cached(&mut self.type_names, e);
+            ui.add_space(6.0);
+            metadata_block(ui, e, &tn, &sid);
+        }
+    }
+
+    /// Klasör: başlığın altında öğe sayıları ve içerik listesi.
+    fn folder_preview(&mut self, ui: &mut egui::Ui, e: &Entry, surf: PvSurface) {
+        let ctx = ui.ctx().clone();
+        let weak = ui.visuals().weak_text_color();
+        let list = self.children_for(&e.path, &ctx);
+        let dirs = list.iter().filter(|c| c.is_dir).count();
+        let files = list.len() - dirs;
+        if !list.is_empty() {
+            ui.label(
+                RichText::new(crate::i18n::tf(
+                    "{} Dosya, {} Klasör",
+                    &[&files.to_string(), &dirs.to_string()],
+                ))
+                .weak(),
+            );
+            ui.add_space(2.0);
+        }
+        ui.label(RichText::new(e.time_label.as_str()).color(weak));
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(crate::i18n::t("Klasör içeriği"))
+                .size(text_size(12.0))
+                .color(weak),
+        );
+        ui.add_space(4.0);
+        if list.is_empty() {
+            // Okuma sürüyorsa boş mesajı gösterme.
+            if self.peek_pending.contains(&e.path) {
+                busy(ui);
+            } else {
+                ui.label(RichText::new(crate::i18n::t("Bu klasör boş.")).weak());
+            }
+            return;
+        }
+        let max_h = if surf == PvSurface::Panel {
+            (ui.available_height() - 8.0).clamp(120.0, 360.0)
+        } else {
+            (ui.available_height() - 8.0).max(160.0)
+        };
+        egui::ScrollArea::vertical()
+            .id_salt(ui.id().with("folder_children"))
+            .max_height(max_h)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                for c in list.iter().take(500) {
+                    ui.horizontal(|ui| {
+                        let (r, _) = ui.allocate_exact_size(Vec2::splat(16.0), Sense::hover());
+                        draw_icon(ui.painter(), &mut self.images, &c.path, c.is_dir, &c.ext, r);
+                        ui.add_space(2.0);
+                        ui.add(egui::Label::new(RichText::new(&c.name)).truncate());
+                        if !c.is_dir {
+                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                                ui.label(
+                                    RichText::new(fsutil::format_size(c.size))
+                                        .size(text_size(11.0))
+                                        .color(weak),
+                                );
+                            });
+                        }
+                    });
+                }
+            });
+    }
+
+    /// Klasör içeriği önbelleği; yoksa arka planda okumayı başlatır.
+    fn children_for(&mut self, dir: &Path, ctx: &egui::Context) -> Arc<[Entry]> {
+        if let Some(v) = self.peek.get(dir) {
+            return v.clone();
+        }
+        if self.peek_pending.insert(dir.to_path_buf()) {
+            let dir = dir.to_path_buf();
+            let hidden = self.show_hidden;
+            let tx = self.peek_tx.clone();
+            let ctx = ctx.clone();
+            std::thread::spawn(move || {
+                let v = fsutil::read_children(&dir, hidden, 500);
+                let _ = tx.send((dir, v));
+                ctx.request_repaint();
+            });
+        }
+        Arc::from([])
+    }
+
+    fn poll_peek(&mut self) {
+        while let Ok((dir, v)) = self.peek_rx.try_recv() {
+            self.peek_pending.remove(&dir);
+            self.peek.insert(dir, v.into());
         }
     }
 
@@ -8013,6 +8351,7 @@ impl eframe::App for App {
             t.ensure_loaded(ctx);
         }
         self.poll_subdirs();
+        self.poll_peek();
         // Her iki bölme de arka plan işlerini sürdürür: odaksız bölmenin yüklemesi,
         // izleyicisi ve araması da burada boşaltılır.
         for t in self.tabs.iter_mut().chain(self.pane2.iter_mut()) {
@@ -8115,8 +8454,25 @@ impl eframe::App for App {
         // Kaydırma sırasında diske yazma pahalı işler ertelensin; hiç durmayan
         // kaydırmalarda kayıt, hareketsizlikte yapılır (save_config UI dişi
         // disk yazımı — kaydırma sırasında 80 ms'lik takılmalar yapar).
-        let scroll_motion = ctx.input(|i| {
-            i.smooth_scroll_delta != egui::Vec2::ZERO || i.raw_scroll_delta != egui::Vec2::ZERO
+        // Kaydırma girişi paneller onu tüketmeden önce okunur: `smooth_scroll_delta`
+        // bir ScrollArea tarafından harcandığında sıfırlanıyor. Aynı örnek hem
+        // pompayı hem de tanılama günlüğünü besler.
+        let ppp = ctx.pixels_per_point();
+        let (scroll_motion, scroll_in) = ctx.input(|i| {
+            let (velocity, pending) = i.pan_momentum();
+            (
+                i.smooth_scroll_delta != egui::Vec2::ZERO || i.raw_scroll_delta != egui::Vec2::ZERO,
+                ScrollSample {
+                    offset: 0.0,
+                    viewport: 0.0,
+                    view: 0,
+                    raw: i.raw_scroll_delta,
+                    smooth: i.smooth_scroll_delta,
+                    velocity,
+                    pending,
+                    pixels_per_point: ppp,
+                },
+            )
         });
         if !scroll_motion {
             // Ayarları/sekmeleri değiştiyse arada bir kaydet (çökme veya zorla kapatmada kaybolmasın)
@@ -8248,7 +8604,7 @@ impl eframe::App for App {
                 .frame(egui::Frame::new().fill(pl.content).inner_margin(12))
                 .show(ctx, |ui| {
                     if self.pane == 1 {
-                        self.preview_panel(ui);
+                        self.preview_panel(ui, &mut actions);
                     } else {
                         self.details_panel(ui);
                     }
@@ -8277,7 +8633,7 @@ impl eframe::App for App {
         let perf_dialogs = perf_t0.elapsed().as_secs_f32() * 1000.0;
         self.dialogs(ctx);
         self.overlays(ctx);
-        self.quick_look_ui(ctx);
+        self.quick_look_ui(ctx, &mut actions);
         self.drag_overlay(ctx);
         self.draw_context_menu(ctx, &mut actions);
 
@@ -8316,9 +8672,20 @@ impl eframe::App for App {
         }
         if std::env::var_os("SWIFT_EXPLORER_WHEELLOG").is_some() {
             let perf_now = perf_t0.elapsed().as_secs_f32() * 1000.0;
+            // Bölünmüş görünümde son çizilen bölme kazanır; tanılama için yeterli.
+            let (offset, viewport) = if self.view_level == 0 {
+                self.details_scroll
+            } else {
+                self.grid_scroll
+            };
             perf_log(
-                ctx,
                 &self.images,
+                &ScrollSample {
+                    offset,
+                    viewport,
+                    view: self.view_level,
+                    ..scroll_in
+                },
                 perf_pre,
                 perf_nav - perf_pre,
                 perf_status - perf_nav,
@@ -8331,6 +8698,18 @@ impl eframe::App for App {
         // Kaydırma pompası: Windows'ta WM_PAINT düşük öncelikli iletidir; dokunmatik
         // pan giriş kuyruğunu ~30 Hz'de beslediğinden çizim olay hızına kilitlenir.
         // WM_TIMER pompası kuyruk boşaldığı an yeniden çizim isteyerek bunu kırar.
+        // Gömülü PDF/ses/video görüntüleyicisi: istek hangi yüzeyden geldiyse yalnızca
+        // o gösterilir (Hızlı Önizleme açıkken yan panelinki gizlenir). Menü/dialog
+        // açıkken de gizlenir; alt pencere egui içeriğinin üstünde kalır.
+        let want = match (self.quick.is_some(), self.web_want.as_ref()) {
+            (true, Some(w)) => w.overlay.then(|| w.clone()),
+            (_, w) => w.cloned(),
+        };
+        let allow = matches!(self.dialog, Dialog::None)
+            && self.menu.is_none()
+            && !ctx.input(|i| i.viewport().minimized.unwrap_or(false));
+        self.web.sync(self.hwnd, want.as_ref(), allow, ctx);
+        self.web_want = None;
         self.scroll_pump(scroll_motion);
     }
 

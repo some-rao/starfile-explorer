@@ -204,6 +204,11 @@ Order matters; it is the de-facto contract of the UI.
 menu or OLE drag, because those swallow the real mouse-up. `on_exit` cancels searches and saves config
 (`app.rs:4520-4525`).
 
+Added after the six-phase work: `quick_look_ui` draws the built-in Quick Look overlay after `overlays`
+and before `drag_overlay`; then `web.sync(hwnd, want, allow, ctx)` positions/hides the WebView2 child
+window using this frame's `App.web_want` (cleared right after), and only then does `scroll_pump` run.
+`web_want` is written by whichever surface drew a PDF/video/audio preview last (Quick Look wins).
+
 **Repaint policy** (no continuous repaint): input events; 100 ms while jobs run; 250 ms while toasts are
 visible; 20 s heartbeat; `request_repaint()` from worker threads; `request_repaint_after(16..)` for
 debounced refreshes. Any new background work must request a repaint itself.

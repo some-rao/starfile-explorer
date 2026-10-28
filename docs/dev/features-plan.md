@@ -465,7 +465,48 @@ admin/MFT index.
 | 3 | `bf54638` | `src/query.rs` (scope + `ext:`/`type:`/`size:`/`modified:`/`kind:`/`-word`), scope menu, removable chips row, scope in status bar |
 | 4 | `5e8a231` | `src/git.rs` (`HEAD` + `git status --porcelain=v2`), status-bar branch pill, Git details column (branch on repo root, state letter per file) |
 | 5 | `9aa07ac` | `src/highlight.rs` (single-pass lexer, 9 language families), `src/markdown.rs` (pulldown-cmark), preview rewrite, Space → built-in Quick Look overlay with `quick_look` setting |
-| 6 | (this commit) | split view: `pane2`/`focus`, `split_area`, Ctrl+\\, View-menu toggle |
+| 6 | `52b5700` | split view: `pane2`/`focus`, `split_area`, Ctrl+\\, View-menu toggle |
+| 6.1 | `2670c96` | unique egui ids per pane (`App.pane_no`), Space closes Quick Look again |
+| 5.1 | (this commit) | preview v2 + column layout (see below) |
+
+## Post-review fixes (preview v2 and details columns)
+
+Raised by the user after the six phases:
+
+1. **Red frames in split view** — both panes reused the same egui widget ids, so
+   egui's debug id-clash warning painted red rects around both panes. Every
+   pane-owned id (`list_bg`, `page_group`, the group headers, inline rename, the
+   details `TableBuilder` salt) is now suffixed with `App.pane_no` (`0`/`1`).
+2. **Space closes the preview** — the same key toggles: Quick Look open → close,
+   otherwise open.
+3. **Folder preview** — the panel (and Quick Look) now show the folder's own date
+   and `{} Dosya, {} Klasör`, then its children (folders first, natural order,
+   cap 500, no recursive size). Children are read on a worker thread and cached
+   in `App.peek`, keyed by path.
+4. **Non-previewable files** — a details card (`metadata_block`) with name, type,
+   size, modified, created and full path replaces the old "no preview" text.
+5. **Open with** — every preview has *Aç* and (files only) *Birlikte aç…*
+   buttons; they queue `Action::OpenEntry` / `Action::OpenWith`.
+6. **PDF, video, audio** — embedded **Edge WebView2** (`src/webview.rs`,
+   `webview2-com`): PDFs go to the runtime's own viewer via `file:///`, media
+   play through `player.html` served from a virtual host
+   (`swift-app.local` → asset folder, `swift-media.local` → the file's parent).
+   Creation is asynchronous (STA COM, `CoInitializeEx` in `start`); until the
+   controller is ready the preview shows the thumbnail and
+   *Önizleme hazırlanıyor…*. The child HWND is hidden while a menu or dialog is
+   open, while the window is minimised, and for the side panel while Quick Look
+   covers it. Bounds are DIPs, `RasterizationScale` = `pixels_per_point`.
+7. **Word / Excel / PowerPoint / ODF** — thumbnail hero plus extracted text
+   (`src/ooxml.rs`: zip + `quick-xml`; docx paragraphs/tables, pptx slides,
+   xlsx sheets with shared-string resolution, ODF `content.xml`; 200 KB cap).
+8. **Details columns** — `Değiştirme tarihi`, `Tür` and `Boyut` are left-aligned
+   (heading and cells); `Name` is content-sized (longest of four candidates over
+   the first 4000 rows, +34 px, clamped 220–460 px, then shrunk to fit), `Type`
+   is content-sized, and the remaining space becomes a trailing spacer column so
+   columns start right after the name like Explorer.
+
+New i18n keys: `Klasör içeriği`, `Yol`, `Önizleme hazırlanıyor…`,
+`Gömülü görüntüleyici kullanılamıyor` (all seven language files + `TABLE`).
 
 ## Deviations from the design above
 
@@ -501,5 +542,16 @@ admin/MFT index.
    Quick Look entries.
 6. **Split view** — View → *Split view* or `Ctrl+\`; click a folder in the
    right pane (it takes focus), `Alt+Left` goes back only in that pane; the tab
-   strip, status bar and side panel follow the focused pane.
+   strip, status bar and side panel follow the focused pane. No red frames.
+7. **Preview v2** — select a folder (contents list + counts), a `.txt` file
+   (text), a `.pdf` (embedded viewer, scroll/zoom work), `.mp3`/`.mp4`
+   (play/pause, seek), `.docx`/`.xlsx`/`.pptx` (thumbnail + text), an `.exe`
+   (details card), and press *Birlikte aç…* on any file.
+8. **Quick Look** — Space opens it over the list, Space again closes it; Esc and
+   the window's ✕ also close it; ←/→ move through the folder while it is open;
+   PDF/video/audio play inside the overlay.
+9. **Columns** — in Details view drag the *Değiştirme tarihi* / *Tür* / *Boyut*
+   headings: values start at the left edge of each column, the *Name* column is
+   only as wide as the longest visible name (220–460 px) and Date/Type/Size
+   follow immediately after it.
 

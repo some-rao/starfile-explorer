@@ -9,8 +9,10 @@ mod highlight;
 mod i18n;
 mod images;
 mod markdown;
+mod media;
 mod menu;
 mod newfile;
+mod ooxml;
 #[cfg(not(windows))]
 mod properties;
 mod query;
@@ -22,6 +24,8 @@ mod shell;
 mod system;
 mod tab;
 mod update;
+#[cfg_attr(not(windows), path = "webview_unix.rs")]
+mod webview;
 #[cfg_attr(not(windows), path = "win_unix.rs")]
 mod win;
 mod wsl;

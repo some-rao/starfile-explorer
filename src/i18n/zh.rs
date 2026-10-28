@@ -363,4 +363,8 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Kapalı", "关闭"),
     ("Bölünmüş görünüm", "分屏视图"),
     ("Bölünmüş görünümü kapat", "关闭分屏视图"),
+    ("Klasör içeriği", "文件夹内容"),
+    ("Yol", "路径"),
+    ("Önizleme hazırlanıyor…", "正在准备预览…"),
+    ("Gömülü görüntüleyici kullanılamıyor", "内置查看器不可用"),
 ];

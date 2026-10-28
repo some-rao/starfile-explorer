@@ -565,6 +565,10 @@ static TABLE: &[(&str, &str)] = &[
     ("Kapalı", "Off"),
     ("Bölünmüş görünüm", "Split view"),
     ("Bölünmüş görünümü kapat", "Close split view"),
+    ("Klasör içeriği", "Folder contents"),
+    ("Yol", "Path"),
+    ("Önizleme hazırlanıyor…", "Preparing preview…"),
+    ("Gömülü görüntüleyici kullanılamıyor", "Embedded viewer unavailable"),
 ];
 
 #[cfg(test)]

@@ -363,4 +363,8 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Kapalı", "Desativado"),
     ("Bölünmüş görünüm", "Modo dividido"),
     ("Bölünmüş görünümü kapat", "Fechar modo dividido"),
+    ("Klasör içeriği", "Conteúdo da pasta"),
+    ("Yol", "Caminho"),
+    ("Önizleme hazırlanıyor…", "Preparando a visualização…"),
+    ("Gömülü görüntüleyici kullanılamıyor", "Visualizador integrado indisponível"),
 ];

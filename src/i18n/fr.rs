@@ -366,4 +366,8 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Kapalı", "Désactivé"),
     ("Bölünmüş görünüm", "Vue fractionnée"),
     ("Bölünmüş görünümü kapat", "Fermer la vue fractionnée"),
+    ("Klasör içeriği", "Contenu du dossier"),
+    ("Yol", "Chemin"),
+    ("Önizleme hazırlanıyor…", "Préparation de l'aperçu…"),
+    ("Gömülü görüntüleyici kullanılamıyor", "Visionneuse intégrée indisponible"),
 ];

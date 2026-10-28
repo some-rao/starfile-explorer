@@ -1198,13 +1198,45 @@ pub fn has_thumbnail(ext: &str) -> bool {
 
 // ---------------------------------------------------------------- önizleme
 
+/// Önizleme paneli için klasör içeriği: önce klasörler, sonra dosyalar.
+/// `limit` aşılınca okuma durur (çok kalabalık klasörlerde panel donmasın).
+pub fn read_children(dir: &Path, show_hidden: bool, limit: usize) -> Vec<Entry> {
+    let mut v = Vec::new();
+    let Ok(rd) = fs::read_dir(dir) else {
+        return v;
+    };
+    for de in rd.flatten() {
+        let Ok(md) = de.metadata() else { continue };
+        let e = Entry::from_metadata(de.path(), &md);
+        if !show_hidden && e.hidden {
+            continue;
+        }
+        v.push(e);
+        if v.len() >= limit {
+            break;
+        }
+    }
+    v.sort_by(|a, b| {
+        b.is_dir
+            .cmp(&a.is_dir)
+            .then_with(|| natural_cmp(&a.name_lower, &b.name_lower))
+    });
+    v
+}
+
 pub enum PreviewData {
     Text(String),
+    /// Ofis belgesinden çıkarılmış metin (bkz. `ooxml`)
+    Office(String),
     Binary,
     Error(String),
 }
 
 pub fn read_preview(path: &Path) -> PreviewData {
+    // Ofis belgeleri zip+XML'dir; bayt olarak metin sayılmaz, ayrıştırılır.
+    if let Some(text) = crate::ooxml::extract(path) {
+        return PreviewData::Office(text);
+    }
     let mut f = match fs::File::open(path) {
         Ok(f) => f,
         Err(e) => return PreviewData::Error(e.to_string()),
