@@ -379,4 +379,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Yolu kopyala", "Copy path"),
     ("Hızlı Önizleme", "Quick Look"),
     ("Tüm sonuçları göster ({})", "Show all results ({})"),
+    ("Kopyala", "Copy"),
+    ("Kes", "Cut"),
+    ("Sil", "Delete"),
     ("↑↓ taşı   ↵ aç   → komutlar   Ctrl+↵ konumu göster   Esc kapat", "↑↓ move   ↵ open   → commands   Ctrl+↵ reveal   Esc close"),];

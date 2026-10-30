@@ -9,7 +9,6 @@ use crate::fsutil::{self, Entry};
 use crate::i18n;
 use crate::query::SearchScope;
 use crate::shell::Img;
-use crate::tab::Tab;
 
 use super::*;
 
@@ -753,7 +752,6 @@ impl super::App {
             return;
         }
         // ---- drawing ----
-        // backdrop
         let screen = ctx.screen_rect();
         let backdrop = egui::Area::new(egui::Id::new("palette_backdrop"))
             .fixed_pos(screen.min)
@@ -761,7 +759,7 @@ impl super::App {
             .show(ctx, |ui| {
                 let (r, resp) = ui.allocate_exact_size(screen.size(), Sense::click());
                 ui.painter()
-                    .rect_filled(r, 0.0, Color32::from_black_alpha(70));
+                    .rect_filled(r, 0.0, Color32::from_black_alpha(90));
                 resp
             });
         if backdrop.inner.clicked() {
@@ -769,59 +767,57 @@ impl super::App {
             return;
         }
 
-        let width = (screen.width() - 80.0).min(720.0).max(480.0);
-        let max_h = (screen.height() - 200.0).min(520.0).max(240.0);
+        let tf = super::text_factor();
+        let width = (screen.width() - 60.0).min(760.0).max(520.0);
+        let max_h = (screen.height() - 120.0).min(560.0).max(300.0);
+
+        let fill = ctx.style().visuals.window_fill();
+        let border = ctx.style().visuals.window_stroke().color;
+        let text_color = ctx.style().visuals.text_color();
+        let weak = ctx.style().visuals.weak_text_color();
 
         egui::Area::new(egui::Id::new("palette_card"))
-            .fixed_pos(Pos2::new(screen.center().x - width / 2.0, 72.0))
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, -screen.height() * 0.08))
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 ui.set_min_width(width);
                 ui.set_max_width(width);
                 egui::Frame::window(ui.style())
-                    .fill(self.palette_frame_fill())
-                    .stroke(Stroke::new(1.0, self.palette_border()))
-                    .corner_radius(10.0)
-                    .shadow(egui::epaint::Shadow {
-                        offset: [0, 8],
-                        blur: 24,
-                        spread: 0,
-                        color: Color32::from_black_alpha(60),
-                    })
+                    .fill(fill)
+                    .stroke(Stroke::new(1.0, border))
+                    .corner_radius(12.0)
+                    .inner_margin(egui::Margin::same(12))
+                    .shadow(ctx.style().visuals.window_shadow)
                     .show(ui, |ui| {
-                        ui.set_min_height(0.0);
                         ui.set_max_height(max_h);
-                        // input row
                         self.palette_input_row(ui);
-                        ui.separator();
-                        // rows
+                        ui.add_space(4.0);
                         egui::ScrollArea::vertical()
                             .id_salt("palette_list")
-                            .max_height(max_h - 90.0)
+                            .max_height(max_h - 110.0)
+                            .auto_shrink([false, true])
                             .show(ui, |ui| {
                                 self.palette_rows(ui);
                             });
-                        ui.separator();
+                        ui.add_space(4.0);
                         self.palette_footer(ui);
                     });
             });
     }
 
-    fn palette_frame_fill(&self) -> Color32 {
-        // reuse panel color
-        Color32::from_gray(32)
-    }
-    fn palette_border(&self) -> Color32 {
-        Color32::from_gray(60)
-    }
-
     fn palette_input_row(&mut self, ui: &mut egui::Ui) {
+        let tf = super::text_factor();
         ui.horizontal(|ui| {
-            ui.label(RichText::new("⌕").size(16.0));
+            ui.label(
+                RichText::new("⌕")
+                    .size(18.0 * tf)
+                    .color(ui.style().visuals.weak_text_color()),
+            );
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut self.palette.as_mut().unwrap().text)
                     .id(egui::Id::new("palette_input"))
-                    .desired_width(ui.available_width() - 90.0)
+                    .desired_width(ui.available_width() - 110.0)
+                    .font(egui::FontId::proportional(14.0 * tf))
                     .frame(false),
             );
             if !resp.has_focus() {
@@ -839,8 +835,8 @@ impl super::App {
             };
             ui.label(
                 RichText::new(mode_name)
-                    .size(11.0)
-                    .color(Color32::from_gray(160)),
+                    .size(11.0 * tf)
+                    .color(self.accent),
             );
         });
         // chip for actions target
@@ -948,7 +944,7 @@ impl super::App {
                     egui::Align2::CENTER_CENTER,
                     "›",
                     egui::FontId::proportional(14.0),
-                    Color32::from_gray(180),
+                    ui.style().visuals.weak_text_color(),
                 );
             }
             // label with spans
@@ -1093,18 +1089,16 @@ impl super::App {
         };
         ui.horizontal(|ui| {
             ui.label(
-                RichText::new(i18n::t(
-                    "↑↓ taşı   ↵ aç   → komutlar   Ctrl+↵ konumu göster   Esc kapat",
-                ))
-                .size(10.5)
-                .color(Color32::from_gray(120)),
+                RichText::new("Up/Down move   Enter open   Right commands   Ctrl+Enter reveal   Esc close")
+                    .size(10.5 * super::text_factor())
+                    .color(ui.style().visuals.weak_text_color()),
             );
             if !scan_info.is_empty() {
                 ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
                         RichText::new(scan_info)
-                            .size(10.5)
-                            .color(Color32::from_gray(120)),
+                            .size(10.5 * super::text_factor())
+                            .color(ui.style().visuals.weak_text_color()),
                     );
                 });
             }
@@ -1249,7 +1243,7 @@ impl super::App {
                         cmd: Some(c),
                         label,
                         spans: Vec::new(),
-                        detail: cmd_shortcut(c).to_string(),
+                        detail: String::new(),
                         meta: String::new(),
                         enabled,
                         reason,
