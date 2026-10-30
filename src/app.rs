@@ -7232,7 +7232,7 @@ impl App {
             .show(ctx, |ui| {
                 let (r, resp) = ui.allocate_exact_size(screen.size(), Sense::click());
                 ui.painter()
-                    .rect_filled(r, 0.0, Color32::from_black_alpha(96));
+                    .rect_filled(r, 0.0, Color32::from_black_alpha(40));
                 if resp.clicked() {
                     close = true;
                 }
