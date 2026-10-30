@@ -552,8 +552,12 @@ pub struct App {
     /// İkinci bölmenin sekmeleri (odak dışındayken)
     pane2: Vec<Tab>,
     pane2_active: usize,
-    /// `tabs` hangi bölmeyi tutuyor: 0 sol, 1 sağ
+    /// Odaklı bölme: 0 sol, 1 sağ. `self.tabs` her zaman odaklı kümedir.
     focus: u8,
+    /// Birincil sekme kümesi (`tabs`) solda mı çiziliyor? Odak değişince
+    /// kümeler takas edilir ve bu bayrak da döner; böylece kullanıcının
+    /// baktığı içerik yerinde kalır (odak değişimi görsel zıplama yaratmaz).
+    left_tabs: bool,
     /// Şu an çizilen bölme (0 sol, 1 sağ). Bölünmüş görünümde iki bölme de aynı
     /// pencere öğelerini kullandığından, egui kimliklerinin çakışmaması için
     /// kimliklere bu numara eklenir (bkz. `split_area`).
@@ -1851,6 +1855,7 @@ impl App {
             pane2: Vec::new(),
             pane2_active: 0,
             focus: 0,
+            left_tabs: true,
             pane_no: 0,
             background: cfg.background,
             resident,
@@ -3215,18 +3220,28 @@ impl App {
             }
             Action::ToggleSplit => {
                 if self.split {
-                    self.split = false;
+                    // Odak ikinci bölmedeyse sekmeleri ana bölmeye taşınır (bkz.
+                    // `merge_split_panes`); ters sıra uygulamayı çökertirdi.
+                    let (tabs, active) = merge_split_panes(
+                        std::mem::take(&mut self.tabs),
+                        self.active,
+                        std::mem::take(&mut self.pane2),
+                        self.pane2_active,
+                        self.focus,
+                    );
+                    self.tabs = tabs;
+                    self.active = active;
+                    self.focus = 0;
+                    self.left_tabs = true;
                     self.pane2.clear();
                     self.pane2_active = 0;
-                    if self.focus != 0 {
-                        // İkinci bölme öndeyse sekmelerini ana bölmeye taşı
-                        self.swap_panes();
-                        self.focus = 0;
-                    }
+                    self.split = false;
                 } else {
                     let path = self.tabs[self.active].path.clone();
                     self.pane2 = vec![Tab::new_lazy(path)];
                     self.pane2_active = 0;
+                    self.focus = 0;
+                    self.left_tabs = true;
                     self.split = true;
                 }
             }
@@ -5741,6 +5756,35 @@ fn type_name_cached(map: &mut HashMap<String, String>, e: &Entry) -> String {
 }
 
 /// Önizleme verisini arka planda okur; aynı yol için yeniden okumaz.
+/// Bölünmüş görünüm kapanırken hangi sekme kümesinin ana görünüm olarak
+/// kalacağını belirler: odaklı bölmenin sekmeleri.
+///
+/// Sıra önemlidir: ikinci bölmenin sekmeleri **önce** ana kümeye taşınır, sonra
+/// ikinci bölme boşaltılır. Ters sıra (önce boşaltma, sonra takas) odak sağda
+/// iken `tabs`'ı boş bırakıyor ve sonraki karede dizin taşmasıyla uygulamayı
+/// çökertiyordu.
+fn merge_split_panes(
+    tabs: Vec<Tab>,
+    active: usize,
+    pane2: Vec<Tab>,
+    pane2_active: usize,
+    focus: u8,
+) -> (Vec<Tab>, usize) {
+    let (mut tabs, mut active) = if focus != 0 && !pane2.is_empty() {
+        (pane2, pane2_active)
+    } else {
+        (tabs, active)
+    };
+    if tabs.is_empty() {
+        // Emniyet: hiç sekme kalmadıysa Bu bilgisayar'a dön.
+        tabs.push(Tab::new_lazy(std::path::PathBuf::from(THIS_PC)));
+        active = 0;
+    } else {
+        active = active.min(tabs.len() - 1);
+    }
+    (tabs, active)
+}
+
 fn ensure_preview(store: &mut Preview, path: &Path, ctx: &egui::Context) {
     if store.path.as_deref() == Some(path) {
         return;
@@ -5919,14 +5963,16 @@ impl App {
         }
     }
 
-    /// İki bölmeli görünüm: solda odaklı, sağda ikinci bölme.
+    /// İki bölmeli görünüm.
     ///
-    /// Odaksız bölme çizilirken sekme kümeleri yer değiştirir ve o bölmenin
-    /// eylemleri hâlâ o bölme öndeyken hemen uygulanır; böylece her eylem doğru
-    /// sekmeye gider. Kare sonunda odak kullanıcının bölmesine döner.
+    /// `self.tabs` her zaman **odaklı** sekme kümesidir; `pane2` diğeridir.
+    /// `left_tabs` birincil kümenin hangi tarafta çizildiğini tutar. Odak
+    /// değişince iki küme takas edilir ve bayrak da döner; böylece kullanıcının
+    /// baktığı içerik aynı tarafta kalır (odak değişimi görsel zıplama yaratmaz).
     fn split_area(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        let left_tabs = self.left_tabs;
         let focus = self.focus;
-        let mut new_focus = None;
+        let mut new_focus: Option<u8> = None;
         let h = ui.available_height();
         let total = ui.available_width();
         let left_w = ((total - 1.0) * 0.5).floor().max(80.0);
@@ -5953,33 +5999,44 @@ impl App {
                     ui.push_id(("pane", pane), |ui| {
                         // Çizilen bölmenin numarası: kalan kimlikler de buna göre ayrışır.
                         self.pane_no = pane;
-                        if pane != focus {
+                        // Bu tarafta birincil (odaklı) küme mi çizilecek?
+                        let primary = (pane == 0) == left_tabs;
+                        if !primary {
                             self.swap_panes();
                         }
-                        if pane != focus {
-                            // Başlık: ikinci bölmenin hangi klasörde olduğunu gösterir
-                            let title = {
-                                let t = &self.tabs[self.active];
-                                path_label(&t.path)
-                            };
-                            let p = pal_of(ui);
-                            ui.add_space(2.0);
-                            ui.horizontal(|ui| {
-                                ui.add_space(6.0);
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(title).size(text_size(12.0)).color(p.weak),
-                                    )
-                                    .truncate(),
-                                );
-                            });
-                            ui.separator();
-                        }
+                        // Başlık: her bölme hangi klasörde olduğunu gösterir. İki
+                        // bölmede de çizilir ki odak değişince içerik kaymasın.
+                        let title = {
+                            let p = self.tabs[self.active].path.clone();
+                            if crate::tab::is_virtual(&p) {
+                                self.loc_name(&p)
+                            } else {
+                                path_label(&p)
+                            }
+                        };
+                        let p = pal_of(ui);
+                        ui.add_space(2.0);
+                        ui.horizontal(|ui| {
+                            ui.add_space(6.0);
+                            // Sağ üstteki kapatma düğmesine yer bırak.
+                            ui.set_max_width((ui.available_width() - 34.0).max(40.0));
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(title)
+                                        .size(text_size(12.0))
+                                        .color(if primary { p.text } else { p.weak }),
+                                )
+                                .truncate(),
+                            );
+                        });
+                        ui.separator();
                         let ctx = ui.ctx().clone();
                         self.tabs[self.active].ensure_loaded(&ctx);
-                        if pane == focus {
+                        if primary {
                             self.pane_body(ui, actions);
                         } else {
+                            // Odaksız bölmenin eylemleri o bölme öndeyken uygulanır;
+                            // böylece her eylem doğru sekmeye gider.
                             let mut local = Vec::new();
                             self.pane_body(ui, &mut local);
                             let acted = !local.is_empty();
@@ -5991,21 +6048,31 @@ impl App {
                                 new_focus = Some(pane);
                             }
                         }
-                        if pane != focus
+                        // Sağ bölmenin sağ üst köşesinde kapatma düğmesi. İçerikten
+                        // sonra çizilir, bu yüzden üstte kalır. Tıklaması bölmeye odak
+                        // vermez: aksi hâlde kapatma sağ bölmenin klasörünü ana görünüme
+                        // taşırdı.
+                        let close = if pane == 1 {
+                            let r = ui.max_rect();
+                            Some(egui::Rect::from_min_size(
+                                egui::pos2(r.right() - 28.0, r.top() + 4.0),
+                                egui::vec2(24.0, 24.0),
+                            ))
+                        } else {
+                            None
+                        };
+                        let on_close = close.is_some_and(|c| {
+                            ui.rect_contains_pointer(c)
+                                && ui.input(|i| i.pointer.any_down() || i.pointer.any_click())
+                        });
+                        if !primary
+                            && !on_close
                             && ui.rect_contains_pointer(ui.max_rect())
                             && ui.input(|i| i.pointer.any_click())
                         {
                             new_focus = Some(pane);
                         }
-                        // Sağ bölmenin sağ üst köşesinde kapatma düğmesi: bölünmüş
-                        // görünüm her zaman buradan kapatılabilir (odak nerede olursa
-                        // olsun). İçerikten sonra çizilir, bu yüzden üstte kalır.
-                        if pane == 1 {
-                            let r = ui.max_rect();
-                            let close = egui::Rect::from_min_size(
-                                egui::pos2(r.right() - 28.0, r.top() + 4.0),
-                                egui::vec2(24.0, 24.0),
-                            );
+                        if let Some(close) = close {
                             let resp =
                                 ui.interact(close, ui.id().with("split_close"), Sense::click());
                             let p = pal_of(ui);
@@ -6040,11 +6107,19 @@ impl App {
         });
         if let Some(p) = new_focus {
             if p != focus {
+                // Kümeleri takas et: `tabs` artık tıklanan bölmenin sekmeleri.
+                // `left_tabs` de döner, bu yüzden içerik yerinde kalır.
                 self.swap_panes();
                 self.focus = p;
+                self.left_tabs = p == 0;
             }
         }
         self.pane_no = self.focus;
+        // Bayrak ile odak tutarlı kalsın (başka yollar da `focus` yazabilir).
+        if !self.split {
+            self.left_tabs = true;
+            self.focus = 0;
+        }
     }
 
     fn file_area(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
@@ -7240,8 +7315,10 @@ impl App {
         let office = !e.is_dir && crate::ooxml::is_office(&e.ext);
         let panel = surf == PvSurface::Panel;
         let thumb = !e.is_dir && (fsutil::has_thumbnail(&e.ext) || office);
-        // Oynatıcı hazır olduğunda büyük küçük resim gösterilmez.
-        let hero = !e.is_dir && (media.is_none() || !self.media_ready(media));
+        // Oynatıcı hazır olduğunda büyük küçük resim gösterilmez. Ofis
+        // belgelerinde de gösterilmez: küçük resim çoğu zaman yalnızca dosya
+        // simgesidir ve belge metnini aşağı itip "boş kutu" görüntüsü veriyordu.
+        let hero = !e.is_dir && !office && (media.is_none() || !self.media_ready(media));
         const UV: Rect = Rect {
             min: Pos2 { x: 0.0, y: 0.0 },
             max: Pos2 { x: 1.0, y: 1.0 },
@@ -7413,10 +7490,22 @@ impl App {
             self.accent.g(),
             self.accent.b()
         );
+        // Oynatıcı sayfası, çevresindeki yüzeyle aynı arka planı kullanır; böylece
+        // web görünümünün kenarında renk sıçraması olmaz.
+        let bgc = if surf == PvSurface::Overlay {
+            pal_of(ui).content
+        } else {
+            ui.visuals().panel_fill
+        };
+        let bg = format!("#{:02X}{:02X}{:02X}", bgc.r(), bgc.g(), bgc.b());
         if self.web.ready() {
             let h = match (surf, kind) {
                 (PvSurface::Panel, crate::media::MediaKind::Audio) => 196.0,
-                (PvSurface::Overlay, crate::media::MediaKind::Audio) => 220.0,
+                // Hızlı Önizleme'de oynatıcı pencereyi doldurur: kart ortada
+                // küçük bir ada gibi kalmasın.
+                (PvSurface::Overlay, crate::media::MediaKind::Audio) => {
+                    (ui.available_height() - 8.0).clamp(220.0, 900.0)
+                }
                 (PvSurface::Panel, _) => (ui.available_height() - 8.0).clamp(160.0, 420.0),
                 (PvSurface::Overlay, _) => (ui.available_height() - 8.0).max(200.0),
             };
@@ -7429,6 +7518,7 @@ impl App {
                 overlay: surf == PvSurface::Overlay,
                 dark: ui.visuals().dark_mode,
                 accent: accent.clone(),
+                bg,
             });
             return;
         }
@@ -7438,7 +7528,9 @@ impl App {
         let failed = self.web.failed();
         let h = match (surf, kind) {
             (PvSurface::Panel, crate::media::MediaKind::Audio) => 196.0,
-            (PvSurface::Overlay, crate::media::MediaKind::Audio) => 220.0,
+            (PvSurface::Overlay, crate::media::MediaKind::Audio) => {
+                (ui.available_height() - 8.0).clamp(220.0, 900.0)
+            }
             (PvSurface::Panel, _) => 200.0,
             (PvSurface::Overlay, _) => 260.0,
         };
@@ -7451,6 +7543,7 @@ impl App {
                 overlay: surf == PvSurface::Overlay,
                 dark: ui.visuals().dark_mode,
                 accent: accent.clone(),
+                bg,
             });
         }
         ui.add_space(4.0);
@@ -8783,6 +8876,8 @@ mod scroll_patch_tests {
 
     use egui::{vec2, Event, InputState, Modifiers, MouseWheelUnit, RawInput, Vec2};
 
+    use super::merge_split_panes;
+
     fn options() -> egui::Options {
         // `Options` has crate-private fields, so no struct-update syntax here.
         let mut o = egui::Options::default();
@@ -9070,5 +9165,36 @@ mod scroll_patch_tests {
             clashes.is_empty(),
             "bölmelerde kimlik çakışması: {clashes:?}"
         );
+    }
+
+    /// Bölünmüş görünüm kapatılırken odaklı bölme ana görünüm olarak kalmalı.
+    /// Odak sağdayken eski kod önce ikinci bölmeyi boşaltıp sonra takas ediyordu:
+    /// `tabs` boş kalıyor ve uygulama sonraki karede çöküyordu.
+    #[test]
+    fn closing_split_keeps_focused_tabs() {
+        let a = || crate::tab::Tab::new_lazy(std::path::PathBuf::from("C:\\A"));
+        let b = || crate::tab::Tab::new_lazy(std::path::PathBuf::from("C:\\B"));
+
+        // Odak solda: sol küme ana görünüm olur.
+        let (tabs, active) = merge_split_panes(vec![a()], 0, vec![b()], 0, 0);
+        assert_eq!(tabs.len(), 1);
+        assert_eq!(tabs[0].path.to_string_lossy(), "C:\\A");
+        assert_eq!(active, 0);
+
+        // Odak sağda: sağdaki küme ana görünüm olur.
+        let (tabs, active) = merge_split_panes(vec![a()], 0, vec![b()], 0, 1);
+        assert_eq!(tabs.len(), 1);
+        assert_eq!(tabs[0].path.to_string_lossy(), "C:\\B");
+        assert_eq!(active, 0);
+
+        // Sağ bölme boşsa sol küme korunur (çökme senaryosu).
+        let (tabs, _) = merge_split_panes(vec![a()], 0, Vec::new(), 0, 1);
+        assert_eq!(tabs.len(), 1);
+        assert_eq!(tabs[0].path.to_string_lossy(), "C:\\A");
+
+        // `active` sınır dışında kalırsa kırpılır.
+        let (tabs, active) = merge_split_panes(vec![a(), a()], 7, vec![b()], 0, 0);
+        assert_eq!(active, 1);
+        assert_eq!(tabs.len(), 2);
     }
 }

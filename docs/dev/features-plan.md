@@ -594,4 +594,41 @@ keyboard focus — previously those keys died inside the child window.
    card per slide; `.md` shows **accent** bold, italic, inline code chips and
    underlined links.
 
+---
+
+## Post-review fixes 3 (split crash, audio, office, markdown tables)
+
+Raised by the user after the round-3 build.
+
+| # | Report | Cause | Fix |
+|---|---|---|---|
+| 1 | Split view **crashed the app**; the pane ✕ closed the whole application | `Action::ToggleSplit` cleared `pane2` **before** swapping the tab sets. A click on ✕ also focused the right pane first, so `swap_panes()` then moved the empty `pane2` into `tabs`; the next frame indexed `tabs[active]` on an empty `Vec` | closing goes through `merge_split_panes()`: the focused set wins, `pane2` is dropped afterwards, `active` is clamped, and an empty result falls back to *Bu bilgisayar*; ✕ clicks are excluded from the pane-focus hit test |
+| 2 | Clicking the path bar of the right pane **moved its content to the primary pane** | panes were laid out as "focused set always on the left"; any focus change swapped `tabs`/`pane2` and the contents visually jumped sides | new `App::left_tabs` records which side draws `tabs`; focus changes swap the sets **and** flip the flag, so every pane keeps its position. Both panes now show their folder path, so nothing shifts vertically either |
+| 3 | Audio player "pretty design in the middle, empty top and bottom" | the card was centred in a 220 px strip inside a much taller Quick Look window; the page background did not match the window fill | overlay audio fills the window height; `player.html` gets a tall layout (large album tile, centred column, full-bleed accent-tinted background) via `@media (min-height: 420px)`, and the page receives the app's exact `bg` colour (`Want::bg`) |
+| 4 | Office preview "doesn't work at all — only an icon / empty box" | Quick Look drew a 640 px *thumbnail* above the document; for Office files the shell returns the file icon, which pushed the actual text below the fold | Office files no longer get the hero thumbnail (`hero && !office`); the document text starts at the top with the full body height |
+| 5 | Markdown "tables / flowcharts / etc not great" | tables used `Grid` with unbounded label widths (columns overflowed, some malformed tables are not parsed at all by GFM), and wide ASCII diagrams scrolled sideways | tables get equal, wrapped columns inside a rounded frame; `normalize_tables()` repairs delimiter rows whose cell count differs from the header (they used to render as raw `\|` text); code blocks shrink their font (down to 7.5 px) when the longest line would not fit horizontally |
+
+Mermaid blocks are deliberately **not** rendered as diagrams: the user chose to
+keep them as highlighted code rather than bundle the ~3 MB Mermaid engine.
+
+### Verification (round 4)
+
+1. **Split view** - `Ctrl+\`, click into the right pane (its path bar, a file,
+   empty space): the pane contents stay on their side; the ✕ in the top-right
+   closes only the split (the app keeps running) and the toolbar toggle
+   un-presses. Repeat with the focus on the right pane, then close via the
+   toolbar button - no crash, and the folder you were using is the one left.
+2. **Audio** - Space on an `.mp3`: the player fills the Quick Look window (no
+   large empty bands above/below), starts playing, Space closes it and the sound
+   stops.
+3. **Office** - Space on a `.docx`/`.xlsx`/`.pptx`: the document text starts at
+   the top of the window (no giant icon above it) and scrolls.
+4. **Markdown tables** - open `docs/dev/architecture.md` in Quick Look: the
+   *File / Lines / Role / Compiled when* table (5-cell delimiter over a 4-cell
+   header) now renders as a table, not as raw `|` lines; long cells wrap instead
+   of running off the window.
+5. **ASCII diagrams** - `docs/dev/architecture.md` "60-second architecture"
+   block fits the width (glyphs stay aligned, no horizontal scrollbar).
+
+
 

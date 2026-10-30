@@ -28,6 +28,12 @@ struct Inline {
 }
 
 pub fn render(ui: &mut egui::Ui, src: &str, md: &Md) {
+    // Bozuk ayırıcı satırlı tablolar (hücre sayısı başlıkla tutmayan) GFM'de
+    // tablo sayılmaz ve boru işaretleri düz metin olarak görünür. Belgede
+    // düzeltip çizeriz; kullanıcı ham `| a | b |` satırları görmesin.
+    let normalized = normalize_tables(src);
+    let src = normalized.as_str();
+
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_TABLES);
     opts.insert(Options::ENABLE_STRIKETHROUGH);
@@ -131,7 +137,21 @@ pub fn render(ui: &mut egui::Ui, src: &str, md: &Md) {
                                 .max_height(360.0)
                                 .auto_shrink([false, true])
                                 .show(ui, |ui| {
-                                    let job = highlight::job(lang, &text, md.size - 1.0, md.c);
+                                    // ASCII şemalar (akış çizimleri) satır sonundan
+                                    // kırpılmasın: sığmıyorsa yazı bir miktar küçülür,
+                                    // böylece blok yatay kaydırma gerektirmez.
+                                    let max_chars =
+                                        text.lines().map(|l| l.chars().count()).max().unwrap_or(0);
+                                    let mut size = md.size - 1.0;
+                                    if max_chars > 0 {
+                                        let avail = ui.available_width().max(80.0) - 16.0;
+                                        let needed = max_chars as f32 * size * 0.62;
+                                        if needed > avail {
+                                            size = (avail / (max_chars as f32 * 0.62))
+                                                .clamp(7.5, size);
+                                        }
+                                    }
+                                    let job = highlight::job(lang, &text, size, md.c);
                                     ui.add(egui::Label::new(job).extend());
                                 });
                         });
@@ -155,23 +175,49 @@ pub fn render(ui: &mut egui::Ui, src: &str, md: &Md) {
             Event::End(TagEnd::Table) => {
                 if !rows.is_empty() {
                     ui.add_space(6.0);
+                    let cols = rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
+                    let gap = 14.0;
+                    let avail = ui.available_width().max(120.0);
+                    // Sütunlar kullanılabilir genişliği eşit paylaşır ve uzun
+                    // hücreler satır içinde sarılır; böylece tablo yatay
+                    // kaydırma gerektirmez (Explorer'da da böyle görünür).
+                    let colw = ((avail - gap * (cols - 1) as f32) / cols as f32).max(48.0);
+                    let fill = if md.c.dark {
+                        egui::Color32::from_white_alpha(6)
+                    } else {
+                        egui::Color32::from_black_alpha(5)
+                    };
                     let id = ui.next_auto_id().with("md_table");
-                    egui::Grid::new(id)
-                        .striped(true)
-                        .spacing([16.0, 6.0])
+                    egui::Frame::new()
+                        .fill(fill)
+                        .corner_radius(6.0)
+                        .inner_margin(egui::Margin::symmetric(8, 6))
                         .show(ui, |ui| {
-                            for (i, r) in rows.iter().enumerate() {
-                                for c in r {
-                                    let color = if i == 0 { md.c.accent } else { md.c.text };
-                                    ui.add(
-                                        egui::Label::new(
-                                            egui::RichText::new(c).size(md.size).color(color),
-                                        )
-                                        .wrap(),
-                                    );
-                                }
-                                ui.end_row();
-                            }
+                            egui::Grid::new(id)
+                                .num_columns(cols)
+                                .spacing([gap, 4.0])
+                                .striped(true)
+                                .show(ui, |ui| {
+                                    for (i, r) in rows.iter().enumerate() {
+                                        for ci in 0..cols {
+                                            let text = r.get(ci).map(String::as_str).unwrap_or("");
+                                            let color =
+                                                if i == 0 { md.c.accent } else { md.c.text };
+                                            ui.scope(|ui| {
+                                                ui.set_width(colw);
+                                                ui.add(
+                                                    egui::Label::new(
+                                                        egui::RichText::new(text)
+                                                            .size(md.size)
+                                                            .color(color),
+                                                    )
+                                                    .wrap(),
+                                                );
+                                            });
+                                        }
+                                        ui.end_row();
+                                    }
+                                });
                         });
                     ui.add_space(6.0);
                 }
@@ -303,6 +349,61 @@ fn para(
     ui.add_space(3.0);
 }
 
+/// Bir tablo ayırıcı satırı mı? (`|---|:---:|---|`; kenar çubukları isteğe bağlı)
+fn is_delim_row(line: &str) -> bool {
+    let t = line.trim();
+    if !t.contains('|') || !t.contains('-') {
+        return false;
+    }
+    let body = t.strip_prefix('|').unwrap_or(t);
+    let body = body.strip_suffix('|').unwrap_or(body);
+    !body.trim().is_empty()
+        && body.split('|').all(|c| {
+            let c = c.trim();
+            let c = c.strip_prefix(':').unwrap_or(c);
+            let c = c.strip_suffix(':').unwrap_or(c);
+            !c.is_empty() && c.chars().all(|ch| ch == '-')
+        })
+}
+
+/// Satırdaki hücre sayısı (baştaki/sondaki `|` sayılmaz).
+fn cell_count(line: &str) -> usize {
+    let t = line.trim();
+    let t = t.strip_prefix('|').unwrap_or(t);
+    let t = t.strip_suffix('|').unwrap_or(t);
+    if t.trim().is_empty() {
+        0
+    } else {
+        t.matches('|').count() + 1
+    }
+}
+
+/// GFM tablo ayırıcı satırını başlıktaki hücre sayısına uydurur.
+///
+/// `| a | b |` başlığına `|---|---|---|` ayırıcısı yazılırsa tablo geçersiz olur:
+/// pulldown-cmark bloğu düz paragraf sayar ve boru işaretleri metin olarak
+/// görünür (GitHub da böyle davranır). Belgeyi düzeltmek yerine önizlemede
+/// hoşgörülü davranırız; kullanıcı ham `|` satırları görmesin.
+fn normalize_tables(src: &str) -> String {
+    let mut out = String::with_capacity(src.len() + 64);
+    let mut prev: Option<String> = None;
+    for line in src.lines() {
+        let mut line = line.to_string();
+        if is_delim_row(&line) {
+            if let Some(h) = prev.as_deref() {
+                let hc = cell_count(h);
+                if h.contains('|') && hc > 0 && cell_count(&line) != hc {
+                    line = format!("|{}", " --- |".repeat(hc));
+                }
+            }
+        }
+        out.push_str(&line);
+        out.push('\n');
+        prev = Some(line);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -322,5 +423,36 @@ mod tests {
         assert!(events
             .iter()
             .any(|e| matches!(e, Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(_))))));
+    }
+
+    /// Fazla hücreli ayırıcı satır tabloyu geçersiz kılıyordu: boru işaretleri
+    /// düz metin olarak görünüyordu. Önizleme ayırıcıyı başlığa uydurur.
+    #[test]
+    fn mismatched_table_delimiter_is_repaired() {
+        let src = "| A | B | C |\n|---|---|---|---|\n| 1 | 2 | 3 |\n";
+        let fixed = normalize_tables(src);
+        assert!(
+            fixed.contains("| --- | --- | --- |"),
+            "ayırıcı düzeltilmedi: {fixed:?}"
+        );
+        let mut opts = Options::empty();
+        opts.insert(Options::ENABLE_TABLES);
+        let events: Vec<_> = Parser::new_ext(&fixed, opts).collect();
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, Event::Start(Tag::Table(_)))));
+        // Tablo hücresi olarak üç sütun gelmeli (ham `|` metni kalmamalı).
+        let cells = events
+            .iter()
+            .filter(|e| matches!(e, Event::Start(Tag::TableCell)))
+            .count();
+        assert_eq!(cells, 6, "başlık + gövde = 6 hücre beklenir");
+    }
+
+    /// Geçerli tablolar ve yatay çizgiler (`---`) olduğu gibi kalır.
+    #[test]
+    fn valid_tables_and_rules_are_untouched() {
+        let src = "| A | B |\n|---|---|\n| 1 | 2 |\n\n---\n\nmetin\n";
+        assert_eq!(normalize_tables(src), src);
     }
 }

@@ -453,6 +453,12 @@ Known asymmetries (do not "fix" by assuming symmetry): `open_terminal` returns `
   carries an explicit `id_salt`, and per-pane scroll memory lives in `App.grid_scroll[pane]`. Regression
   tests `split_panes_have_independent_scroll_areas` / `split_panes_draw_without_id_clashes` (`app.rs`) fail
   if the push_id or a salt is removed.
+- **Split-view panes never swap sides**: `self.tabs` is always the *focused* tab set and `pane2` the other one,
+  but `App::left_tabs` records which side draws `tabs`. A focus change swaps the two sets **and** flips
+  `left_tabs`, so the content the user clicked stays under the cursor (only the accent colour of the path bar
+  moves). Closing the split goes through `merge_split_panes()` (focused set wins, `pane2` cleared afterwards);
+  the old order - clear, then swap - left `tabs` empty and crashed on the next frame
+  (`closing_split_keeps_focused_tabs`).
 - **Restored window guard**: `App::repair_restored_window` (`app.rs:1830-1870`) un-minimizes/centres a
   stored window that is off-screen, maximized oddly or shrunk below 700×420, and `App::save` rewrites the
   last good `"window"` entry instead of persisting a minimized rect. `good_window` ignores `-32000`

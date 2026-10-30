@@ -11,6 +11,8 @@ pub struct Want {
     pub overlay: bool,
     pub dark: bool,
     pub accent: String,
+    /// Oynatıcı sayfasının arka plan rengi (Windows tarafıyla aynı alan).
+    pub bg: String,
 }
 
 /// Windows tarafında oynatıcıdan iletilen tuşlar; burada yok.

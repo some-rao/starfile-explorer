@@ -40,6 +40,8 @@ pub struct Want {
     pub dark: bool,
     /// Vurgu rengi `#RRGGBB`.
     pub accent: String,
+    /// Arka plan rengi `#RRGGBB`: oynatıcı sayfası çevresiyle aynı tonu kullanır.
+    pub bg: String,
 }
 
 /// Oynatıcı içindeyken uygulamaya iletilen tuşlar.
@@ -64,7 +66,7 @@ pub struct WebView {
     /// `Send`/`Sync` gerekmez (COM geri çağrıları da aynı iş parçacığında çalışır).
     state: Rc<RefCell<State>>,
     /// En son yüklenen dosya ve türü; aynı dosya için yeniden gezinilmez.
-    shown: Option<(PathBuf, MediaKind)>,
+    shown: Option<(PathBuf, MediaKind, bool)>,
     visible: bool,
     bounds: Option<[i32; 4]>,
     scale: f32,
@@ -170,7 +172,7 @@ impl WebView {
         let changed = self
             .shown
             .as_ref()
-            .is_none_or(|(p, k)| p != &w.path || *k != w.kind);
+            .is_none_or(|(p, k, d)| p != &w.path || *k != w.kind || *d != w.dark);
         if changed {
             if let Ok(core) = unsafe { controller.CoreWebView2() } {
                 match w.kind {
@@ -181,7 +183,7 @@ impl WebView {
                         }
                     }
                     kind => {
-                        let player = player_page(kind, &w.path, w.dark, &w.accent);
+                        let player = player_page(kind, &w.path, w.dark, &w.accent, &w.bg);
                         if let Some(page) = player {
                             unsafe {
                                 if let Ok(core3) = core.cast::<ICoreWebView2_3>() {
@@ -204,7 +206,7 @@ impl WebView {
                     }
                 }
             }
-            self.shown = Some((w.path.clone(), w.kind));
+            self.shown = Some((w.path.clone(), w.kind, w.dark));
         }
 
         if !self.visible {
@@ -383,7 +385,7 @@ fn file_uri(path: &Path) -> String {
 }
 
 /// Oynatıcı sayfasının adresi; medya, ebeveyn klasörünün sanal ana bilgisayarından gelir.
-fn player_page(kind: MediaKind, path: &Path, dark: bool, accent: &str) -> Option<String> {
+fn player_page(kind: MediaKind, path: &Path, dark: bool, accent: &str, bg: &str) -> Option<String> {
     let name = path.file_name()?.to_string_lossy();
     let kind = if kind == MediaKind::Audio {
         "audio"
@@ -392,8 +394,9 @@ fn player_page(kind: MediaKind, path: &Path, dark: bool, accent: &str) -> Option
     };
     let theme = if dark { "dark" } else { "light" };
     Some(format!(
-        "https://{APP_HOST}/player.html?kind={kind}&theme={theme}&accent={}&name={}&src=https%3A%2F%2F{MEDIA_HOST}%2F{}",
+        "https://{APP_HOST}/player.html?kind={kind}&theme={theme}&accent={}&bg={}&name={}&src=https%3A%2F%2F{MEDIA_HOST}%2F{}",
         percent(accent, false),
+        percent(bg, false),
         percent(&name, false),
         percent(&name, false)
     ))
@@ -435,11 +438,13 @@ mod tests {
             Path::new("C:\\m\\şarkı #1.mp3"),
             true,
             "#0078D4",
+            "#202020",
         )
         .unwrap();
         assert!(page.contains("kind=audio"));
         assert!(page.contains("theme=dark"));
         assert!(page.contains("accent=%230078D4"));
+        assert!(page.contains("bg=%23202020"));
         assert!(page.contains("%C5%9Fark%C4%B1%20%231.mp3"));
     }
 }

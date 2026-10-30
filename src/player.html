@@ -8,21 +8,17 @@
   :root {
     --accent: #0078d4;
     --bg: #f3f3f3;
-    --card: #ffffff;
-    --line: rgba(0, 0, 0, .09);
+    --line: rgba(0, 0, 0, .10);
     --text: #1b1b1b;
     --weak: #5f5f5f;
-    --hover: rgba(0, 0, 0, .05);
-    --shadow: 0 2px 10px rgba(0, 0, 0, .12);
+    --hover: rgba(0, 0, 0, .06);
   }
   html[data-theme="dark"] {
     --bg: #202020;
-    --card: #2b2b2b;
-    --line: rgba(255, 255, 255, .10);
+    --line: rgba(255, 255, 255, .12);
     --text: #f3f3f3;
     --weak: #b4b4b4;
-    --hover: rgba(255, 255, 255, .07);
-    --shadow: 0 2px 12px rgba(0, 0, 0, .45);
+    --hover: rgba(255, 255, 255, .08);
   }
   * { box-sizing: border-box; }
   html, body {
@@ -37,38 +33,33 @@
   body.video { background: #000; }
   video { width: 100%; height: 100%; object-fit: contain; background: #000; display: block; }
 
-  /* ---- audio ------------------------------------------------------- */
+  /* ---- audio: kısa yüzey (yan panel) ------------------------------- */
   body.audio { display: flex; align-items: center; justify-content: center; }
-  .card {
-    width: min(560px, calc(100% - 24px));
-    background: var(--card);
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    box-shadow: var(--shadow);
-    padding: 16px 18px 14px;
+  .stage {
+    width: min(560px, 100%);
     display: grid;
     grid-template-columns: 64px 1fr;
-    grid-template-rows: auto auto auto;
     column-gap: 14px;
-    row-gap: 10px;
+    row-gap: 8px;
+    align-items: center;
+    padding: 10px 16px;
   }
   .art {
     grid-row: 1 / span 2;
-    width: 64px; height: 64px; border-radius: 10px;
+    width: 64px; height: 64px; border-radius: 12px;
     display: flex; align-items: center; justify-content: center;
-    background: linear-gradient(135deg, var(--accent) 0%, rgba(255,255,255,.08) 140%);
-    box-shadow: inset 0 0 0 1px rgba(255,255,255,.18);
+    background: linear-gradient(135deg, var(--accent) 0%, rgba(255, 255, 255, .10) 140%);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .18);
   }
   .art svg { width: 30px; height: 30px; fill: #fff; opacity: .95; }
-  .meta { min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+  .meta { min-width: 0; }
   .name {
     font-size: 15px; font-weight: 400; color: var(--text);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .sub { font-size: 12px; color: var(--weak); margin-top: 2px; }
-
+  .seek { grid-column: 1 / span 2; width: 100%; }
   .bar {
-    grid-column: 1 / span 2;
     position: relative; height: 16px; display: flex; align-items: center;
     cursor: pointer; touch-action: none;
   }
@@ -83,40 +74,70 @@
   .knob {
     position: absolute; width: 12px; height: 12px; border-radius: 50%;
     background: var(--accent); left: 0; transform: translateX(-50%);
-    box-shadow: 0 1px 3px rgba(0,0,0,.3); opacity: 0; transition: opacity .12s;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, .3); opacity: 0; transition: opacity .12s;
   }
   .bar:hover .knob, .bar.drag .knob { opacity: 1; }
   .times {
-    grid-column: 1 / span 2;
     display: flex; justify-content: space-between;
-    font-size: 11px; color: var(--weak); margin-top: -8px;
+    font-size: 11px; color: var(--weak);
     font-variant-numeric: tabular-nums;
   }
   .row {
     grid-column: 1 / span 2;
-    display: flex; align-items: center; gap: 10px;
+    display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
   }
   .play {
-    width: 36px; height: 36px; border-radius: 18px; border: 0;
+    width: 38px; height: 38px; border-radius: 19px; border: 0;
     background: var(--accent); color: #fff; cursor: pointer;
     display: flex; align-items: center; justify-content: center;
-    padding: 0; flex: 0 0 auto;
+    padding: 0; justify-self: center;
   }
   .play:hover { filter: brightness(1.08); }
   .play:active { transform: scale(.96); }
   .play svg { width: 16px; height: 16px; fill: #fff; }
-  .vol { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+  .vol { display: flex; align-items: center; gap: 8px; justify-self: end; }
   .vol svg { width: 16px; height: 16px; fill: var(--weak); flex: 0 0 auto; }
-  input[type="range"] {
-    width: 96px; accent-color: var(--accent); cursor: pointer;
-  }
+  input[type="range"] { width: 84px; accent-color: var(--accent); cursor: pointer; }
   .rate {
     border: 1px solid var(--line); background: transparent; color: var(--text);
     border-radius: 6px; height: 26px; padding: 0 8px; font: inherit; font-size: 12px;
-    cursor: pointer;
+    cursor: pointer; justify-self: start;
   }
   .rate:hover { background: var(--hover); }
-  .msg { color: var(--weak); font-size: 12px; }
+  .msg { grid-column: 1 / span 2; color: var(--weak); font-size: 12px; min-height: 0; }
+
+  /* ---- audio: uzun yüzey (Hızlı Önizleme) --------------------------
+     Pencere büyükken kart ortada küçük bir ada gibi kalmasın: içerik dikeyde
+     ortalanır, arka plan yüzeyin tamamını kaplar. */
+  @media (min-height: 420px) {
+    body.audio {
+      align-items: center;
+      background:
+        radial-gradient(80% 62% at 50% 0%,
+          color-mix(in srgb, var(--accent) 16%, var(--bg)) 0%, var(--bg) 70%);
+    }
+    .stage {
+      height: 100%; width: 100%;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: clamp(10px, 2.6vmin, 22px);
+      padding: 24px 32px;
+    }
+    .art {
+      grid-row: auto;
+      width: clamp(96px, 32vmin, 210px); height: clamp(96px, 32vmin, 210px);
+      border-radius: clamp(16px, 4.4vmin, 30px);
+    }
+    .art svg { width: 42%; height: 42%; }
+    .meta { text-align: center; max-width: min(520px, 100%); }
+    .name { font-size: clamp(15px, 3.2vmin, 22px); }
+    .sub { font-size: clamp(12px, 2.1vmin, 14px); }
+    .seek, .row, .msg { width: min(520px, 100%); }
+    .times { margin-top: 2px; font-size: clamp(11px, 1.9vmin, 13px); }
+    .play { width: clamp(40px, 6.4vmin, 56px); height: clamp(40px, 6.4vmin, 56px); border-radius: 50%; }
+    .play svg { width: 44%; height: 44%; }
+    input[type="range"] { width: clamp(84px, 16vmin, 128px); }
+  }
 </style>
 </head>
 <body>
@@ -126,9 +147,11 @@
   const kind = q.get('kind') || 'video';
   const theme = q.get('theme') || 'light';
   const accent = q.get('accent') || '#0078d4';
+  const bg = q.get('bg') || '';
   const name = q.get('name') || '';
   document.documentElement.dataset.theme = theme;
   document.documentElement.style.setProperty('--accent', accent);
+  if (bg) document.documentElement.style.setProperty('--bg', bg);
 
   const ICON_PLAY = '<svg viewBox="0 0 16 16"><path d="M4 2.5v11l9-5.5-9-5.5z"/></svg>';
   const ICON_PAUSE = '<svg viewBox="0 0 16 16"><path d="M3.5 2.5h3v11h-3zM9.5 2.5h3v11h-3z"/></svg>';
@@ -145,24 +168,26 @@
   if (kind === 'audio') {
     document.body.className = 'audio';
     document.body.innerHTML = `
-      <div class="card">
+      <div class="stage">
         <div class="art">${ICON_NOTE}</div>
         <div class="meta">
           <div class="name" title=""></div>
           <div class="sub">Ses dosyası</div>
         </div>
-        <div class="bar" id="bar">
-          <div class="track"></div>
-          <div class="fill" id="fill"></div>
-          <div class="knob" id="knob"></div>
+        <div class="seek">
+          <div class="bar" id="bar">
+            <div class="track"></div>
+            <div class="fill" id="fill"></div>
+            <div class="knob" id="knob"></div>
+          </div>
+          <div class="times"><span id="cur">0:00</span><span id="dur">0:00</span></div>
         </div>
-        <div class="times"><span id="cur">0:00</span><span id="dur">0:00</span></div>
         <div class="row">
-          <button class="play" id="play" title="Çal / duraklat">${ICON_PLAY}</button>
-          <span class="msg" id="msg"></span>
-          <div class="vol">${ICON_VOL}<input type="range" id="vol" min="0" max="1" step="0.01" value="1"></div>
           <button class="rate" id="rate" title="Oynatma hızı">1×</button>
+          <button class="play" id="play" title="Çal / duraklat">${ICON_PLAY}</button>
+          <div class="vol">${ICON_VOL}<input type="range" id="vol" min="0" max="1" step="0.01" value="1" title="Ses düzeyi"></div>
         </div>
+        <div class="msg" id="msg"></div>
       </div>
       <audio id="a" preload="auto" autoplay></audio>`;
     const a = document.getElementById('a');
