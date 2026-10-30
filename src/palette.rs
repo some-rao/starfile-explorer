@@ -771,10 +771,8 @@ impl super::App {
         let width = (screen.width() - 60.0).min(760.0).max(520.0);
         let max_h = (screen.height() - 120.0).min(560.0).max(300.0);
 
-        let fill = ctx.style().visuals.window_fill();
-        let border = ctx.style().visuals.window_stroke().color;
-        let text_color = ctx.style().visuals.text_color();
-        let weak = ctx.style().visuals.weak_text_color();
+        let dark = ctx.style().visuals.dark_mode;
+        let pal = super::pal(dark);
 
         egui::Area::new(egui::Id::new("palette_card"))
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, -screen.height() * 0.08))
@@ -782,36 +780,40 @@ impl super::App {
             .show(ctx, |ui| {
                 ui.set_min_width(width);
                 ui.set_max_width(width);
-                egui::Frame::window(ui.style())
-                    .fill(fill)
-                    .stroke(Stroke::new(1.0, border))
+                egui::Frame::new()
+                    .fill(pal.content)
+                    .stroke(Stroke::new(1.0, pal.line))
                     .corner_radius(12.0)
-                    .inner_margin(egui::Margin::same(12))
-                    .shadow(ctx.style().visuals.window_shadow)
+                    .inner_margin(egui::Margin::same(14))
+                    .shadow(egui::epaint::Shadow {
+                        offset: [0, 12],
+                        blur: 32,
+                        spread: 0,
+                        color: Color32::from_black_alpha(100),
+                    })
                     .show(ui, |ui| {
                         ui.set_max_height(max_h);
-                        self.palette_input_row(ui);
-                        ui.add_space(4.0);
+                        self.palette_input_row(ui, &pal, tf);
+                        ui.add_space(6.0);
                         egui::ScrollArea::vertical()
                             .id_salt("palette_list")
                             .max_height(max_h - 110.0)
                             .auto_shrink([false, true])
                             .show(ui, |ui| {
-                                self.palette_rows(ui);
+                                self.palette_rows(ui, &pal, tf);
                             });
-                        ui.add_space(4.0);
-                        self.palette_footer(ui);
+                        ui.add_space(6.0);
+                        self.palette_footer(ui, &pal, tf);
                     });
             });
     }
 
-    fn palette_input_row(&mut self, ui: &mut egui::Ui) {
-        let tf = super::text_factor();
+    fn palette_input_row(&mut self, ui: &mut egui::Ui, pal: &super::Pal, tf: f32) {
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new("⌕")
                     .size(18.0 * tf)
-                    .color(ui.style().visuals.weak_text_color()),
+                    .color(pal.weak),
             );
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut self.palette.as_mut().unwrap().text)
@@ -878,7 +880,7 @@ impl super::App {
         }
     }
 
-    fn palette_rows(&mut self, ui: &mut egui::Ui) {
+    fn palette_rows(&mut self, ui: &mut egui::Ui, pal: &super::Pal, tf: f32) {
         let rows = self
             .palette
             .as_ref()
@@ -890,7 +892,7 @@ impl super::App {
             ui.label(
                 RichText::new(i18n::t("Son değiştirilenler"))
                     .size(11.0)
-                    .color(Color32::from_gray(140)),
+                    .color(pal.weak),
             );
             let _ = ui;
             return;
@@ -903,7 +905,7 @@ impl super::App {
                 Color32::TRANSPARENT
             };
             let (rect, resp) = ui.allocate_exact_size(
-                Vec2::new(ui.available_width(), 34.0 * super::text_factor()),
+                Vec2::new(ui.available_width(), 34.0 * tf),
                 Sense::click(),
             );
             if selected || resp.hovered() {
@@ -919,7 +921,7 @@ impl super::App {
             }
             // icon
             let icon_rect = Rect::from_min_size(
-                rect.min + Vec2::new(6.0, (34.0 * super::text_factor() - 16.0) / 2.0),
+                rect.min + Vec2::new(6.0, (34.0 * tf - 16.0) / 2.0),
                 Vec2::splat(16.0),
             );
             if let Some(e) = &row.entry {
@@ -944,14 +946,14 @@ impl super::App {
                     egui::Align2::CENTER_CENTER,
                     "›",
                     egui::FontId::proportional(14.0),
-                    ui.style().visuals.weak_text_color(),
+                    pal.weak,
                 );
             }
             // label with spans
             let label_x = rect.min.x + 28.0;
             let label_rect = Rect::from_min_size(
-                Pos2::new(label_x, rect.min.y + 4.0 * super::text_factor()),
-                Vec2::new(rect.width() - 120.0, 16.0 * super::text_factor()),
+                Pos2::new(label_x, rect.min.y + 4.0 * tf),
+                Vec2::new(rect.width() - 120.0, 16.0 * tf),
             );
             let mut job = egui::text::LayoutJob::default();
             if row.spans.is_empty() {
@@ -959,7 +961,7 @@ impl super::App {
                     &row.label,
                     0.0,
                     egui::TextFormat {
-                        font_id: egui::FontId::proportional(13.0 * super::text_factor()),
+                        font_id: egui::FontId::proportional(13.0 * tf),
                         color: if row.enabled {
                             Color32::from_gray(230)
                         } else {
@@ -979,7 +981,7 @@ impl super::App {
                             &row.label[cursor..s],
                             0.0,
                             egui::TextFormat {
-                                font_id: egui::FontId::proportional(13.0 * super::text_factor()),
+                                font_id: egui::FontId::proportional(13.0 * tf),
                                 color: if row.enabled {
                                     Color32::from_gray(230)
                                 } else {
@@ -994,7 +996,7 @@ impl super::App {
                         &row.label[s..end],
                         0.0,
                         egui::TextFormat {
-                            font_id: egui::FontId::proportional(13.0 * super::text_factor()),
+                            font_id: egui::FontId::proportional(13.0 * tf),
                             color: self.accent,
                             ..Default::default()
                         },
@@ -1006,7 +1008,7 @@ impl super::App {
                         &row.label[cursor..],
                         0.0,
                         egui::TextFormat {
-                            font_id: egui::FontId::proportional(13.0 * super::text_factor()),
+                            font_id: egui::FontId::proportional(13.0 * tf),
                             color: if row.enabled {
                                 Color32::from_gray(230)
                             } else {
@@ -1025,34 +1027,34 @@ impl super::App {
             // detail (relative path or shortcut)
             if !row.detail.is_empty() {
                 let drect = Rect::from_min_size(
-                    Pos2::new(label_x, rect.min.y + 18.0 * super::text_factor()),
-                    Vec2::new(rect.width() - 120.0, 14.0 * super::text_factor()),
+                    Pos2::new(label_x, rect.min.y + 18.0 * tf),
+                    Vec2::new(rect.width() - 120.0, 14.0 * tf),
                 );
                 ui.painter().text(
                     drect.min,
                     egui::Align2::LEFT_TOP,
                     &row.detail,
-                    egui::FontId::proportional(10.5 * super::text_factor()),
+                    egui::FontId::proportional(10.5 * tf),
                     Color32::from_gray(130),
                 );
             }
             // meta right
             if !row.meta.is_empty() {
                 ui.painter().text(
-                    rect.right_top() + Vec2::new(-8.0, 4.0 * super::text_factor()),
+                    rect.right_top() + Vec2::new(-8.0, 4.0 * tf),
                     egui::Align2::RIGHT_TOP,
                     &row.meta,
-                    egui::FontId::proportional(10.5 * super::text_factor()),
+                    egui::FontId::proportional(10.5 * tf),
                     Color32::from_gray(130),
                 );
             }
             // reason if disabled
             if !row.enabled && !row.reason.is_empty() {
                 ui.painter().text(
-                    rect.right_top() + Vec2::new(-8.0, 18.0 * super::text_factor()),
+                    rect.right_top() + Vec2::new(-8.0, 18.0 * tf),
                     egui::Align2::RIGHT_TOP,
                     i18n::t(row.reason),
-                    egui::FontId::proportional(10.0 * super::text_factor()),
+                    egui::FontId::proportional(10.0 * tf),
                     Color32::from_gray(110),
                 );
             }
@@ -1076,7 +1078,7 @@ impl super::App {
         let _ = (ui,);
     }
 
-    fn palette_footer(&mut self, ui: &mut egui::Ui) {
+    fn palette_footer(&mut self, ui: &mut egui::Ui, pal: &super::Pal, tf: f32) {
         let p = self.palette.as_ref().unwrap();
         let scan_info = if let Some(s) = &p.scan {
             if s.done {
@@ -1090,15 +1092,15 @@ impl super::App {
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new("Up/Down move   Enter open   Right commands   Ctrl+Enter reveal   Esc close")
-                    .size(10.5 * super::text_factor())
-                    .color(ui.style().visuals.weak_text_color()),
+                    .size(10.5 * tf)
+                    .color(pal.weak),
             );
             if !scan_info.is_empty() {
                 ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
                         RichText::new(scan_info)
-                            .size(10.5 * super::text_factor())
-                            .color(ui.style().visuals.weak_text_color()),
+                            .size(10.5 * tf)
+                            .color(pal.weak),
                     );
                 });
             }
