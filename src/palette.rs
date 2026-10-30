@@ -1027,11 +1027,9 @@ impl super::App {
                     );
                 }
             }
-            ui.painter().galley(
-                label_rect.min,
-                ui.fonts(|f| f.layout_job(job)),
-                Color32::WHITE,
-            );
+            ui.painter()
+                .with_clip_rect(label_rect)
+                .galley(label_rect.min, ui.fonts(|f| f.layout_job(job)), Color32::WHITE);
             // detail (relative path or shortcut)
             if !row.detail.is_empty() {
                 let drect = Rect::from_min_size(
@@ -1225,7 +1223,7 @@ impl super::App {
                         rows.push(Row {
                             entry: None,
                             cmd: None,
-                            label: format!("Tüm sonuçları göster ({})", total),
+                            label: i18n::tf("Tüm sonuçları göster ({})", &[&total]),
                             spans: Vec::new(),
                             detail: String::new(),
                             meta: String::new(),
