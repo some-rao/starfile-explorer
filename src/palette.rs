@@ -812,14 +812,14 @@ impl super::App {
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new("⌕")
-                    .size(18.0 * tf)
+                    .font(super::ui_font(18.0))
                     .color(pal.weak),
             );
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut self.palette.as_mut().unwrap().text)
                     .id(egui::Id::new("palette_input"))
                     .desired_width(ui.available_width() - 110.0)
-                    .font(egui::FontId::proportional(14.0 * tf))
+                    .font(super::ui_font(14.0))
                     .frame(false),
             );
             if !resp.has_focus() {
@@ -837,7 +837,7 @@ impl super::App {
             };
             ui.label(
                 RichText::new(mode_name)
-                    .size(11.0 * tf)
+                    .font(super::ui_font(11.0))
                     .color(self.accent),
             );
         });
@@ -945,7 +945,7 @@ impl super::App {
                     icon_rect.center(),
                     egui::Align2::CENTER_CENTER,
                     "›",
-                    egui::FontId::proportional(14.0),
+                    super::ui_font(14.0),
                     pal.weak,
                 );
             }
@@ -961,7 +961,7 @@ impl super::App {
                     &row.label,
                     0.0,
                     egui::TextFormat {
-                        font_id: egui::FontId::proportional(13.0 * tf),
+                        font_id: super::ui_font(13.0),
                         color: if row.enabled {
                             Color32::from_gray(230)
                         } else {
@@ -981,7 +981,7 @@ impl super::App {
                             &row.label[cursor..s],
                             0.0,
                             egui::TextFormat {
-                                font_id: egui::FontId::proportional(13.0 * tf),
+                                font_id: super::ui_font(13.0),
                                 color: if row.enabled {
                                     Color32::from_gray(230)
                                 } else {
@@ -996,7 +996,7 @@ impl super::App {
                         &row.label[s..end],
                         0.0,
                         egui::TextFormat {
-                            font_id: egui::FontId::proportional(13.0 * tf),
+                            font_id: super::ui_font(13.0),
                             color: self.accent,
                             ..Default::default()
                         },
@@ -1008,7 +1008,7 @@ impl super::App {
                         &row.label[cursor..],
                         0.0,
                         egui::TextFormat {
-                            font_id: egui::FontId::proportional(13.0 * tf),
+                            font_id: super::ui_font(13.0),
                             color: if row.enabled {
                                 Color32::from_gray(230)
                             } else {
@@ -1034,7 +1034,7 @@ impl super::App {
                     drect.min,
                     egui::Align2::LEFT_TOP,
                     &row.detail,
-                    egui::FontId::proportional(10.5 * tf),
+                    super::ui_font(10.5),
                     Color32::from_gray(130),
                 );
             }
@@ -1044,7 +1044,7 @@ impl super::App {
                     rect.right_top() + Vec2::new(-8.0, 4.0 * tf),
                     egui::Align2::RIGHT_TOP,
                     &row.meta,
-                    egui::FontId::proportional(10.5 * tf),
+                    super::ui_font(10.5),
                     Color32::from_gray(130),
                 );
             }
@@ -1054,7 +1054,7 @@ impl super::App {
                     rect.right_top() + Vec2::new(-8.0, 18.0 * tf),
                     egui::Align2::RIGHT_TOP,
                     i18n::t(row.reason),
-                    egui::FontId::proportional(10.0 * tf),
+                    super::ui_font(10.0),
                     Color32::from_gray(110),
                 );
             }
@@ -1092,14 +1092,14 @@ impl super::App {
         ui.horizontal(|ui| {
             ui.label(
                 RichText::new("Up/Down move   Enter open   Right commands   Ctrl+Enter reveal   Esc close")
-                    .size(10.5 * tf)
+                    .font(super::ui_font(10.5))
                     .color(pal.weak),
             );
             if !scan_info.is_empty() {
                 ui.with_layout(Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
                         RichText::new(scan_info)
-                            .size(10.5 * tf)
+                            .font(super::ui_font(10.5))
                             .color(pal.weak),
                     );
                 });
