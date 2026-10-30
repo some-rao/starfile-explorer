@@ -60,8 +60,10 @@ cargo clippy --all-targets
    the UI will look frozen (the app has no continuous repaint).
 6. **Icons and thumbnails come from the platform shell**, cached as egui textures by `ImageCache`
    (`images.rs`). Never decode images in the UI thread; request through `ImageCache::get`.
-7. **Explorer is the spec.** When behaviour is ambiguous, copy Windows 11 File Explorer. Comments may be
-   Turkish or English; keep the existing style (Turkish is common).
+7. **Explorer is the spec.** When behaviour is ambiguous, copy Windows 11 File Explorer. New code comments,
+   commit messages and review notes are written in **English**; existing Turkish comments may stay until
+   the file is touched. UI text is still authored as Turkish i18n keys (rule 3) — that is the lookup
+   architecture, not a comment-language choice.
 
 ---
 

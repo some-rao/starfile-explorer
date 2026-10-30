@@ -21,7 +21,7 @@ Interface text lives in [`src/i18n.rs`](src/i18n.rs) (Turkish keys and English) 
 
 - Keep a pull request to one change, so it's easy to review and to revert.
 - The app copies Windows 11 File Explorer: if something behaves differently from Explorer, Explorer is usually right.
-- Comments in the code are in Turkish. Write new ones in Turkish or English, whichever you prefer.
+- New code comments and commit messages are in English. Existing Turkish comments can stay until the file is touched.
 
 ## Screenshots
 
