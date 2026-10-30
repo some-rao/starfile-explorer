@@ -971,9 +971,9 @@ impl super::App {
                     egui::TextFormat {
                         font_id: super::ui_font(13.0),
                         color: if row.enabled {
-                            Color32::from_gray(230)
+                            pal.text
                         } else {
-                            Color32::from_gray(120)
+                            pal.weak
                         },
                         ..Default::default()
                     },
@@ -991,9 +991,9 @@ impl super::App {
                             egui::TextFormat {
                                 font_id: super::ui_font(13.0),
                                 color: if row.enabled {
-                                    Color32::from_gray(230)
+                                    pal.text
                                 } else {
-                                    Color32::from_gray(120)
+                                    pal.weak
                                 },
                                 ..Default::default()
                             },
@@ -1018,9 +1018,9 @@ impl super::App {
                         egui::TextFormat {
                             font_id: super::ui_font(13.0),
                             color: if row.enabled {
-                                Color32::from_gray(230)
+                                pal.text
                             } else {
-                                Color32::from_gray(120)
+                                pal.weak
                             },
                             ..Default::default()
                         },
@@ -1168,7 +1168,7 @@ impl super::App {
                             cmd: None,
                             label: e.name.clone(),
                             spans: Vec::new(),
-                            detail: rel_path(e, &self.tabs[self.active].path),
+                            detail: { let r = rel_path(e, &self.tabs[self.active].path); if r == e.name { String::new() } else { r } },
                             meta: format!("{} · {}", human_size(e.size), e.time_label),
                             enabled: true,
                             reason: "",
@@ -1215,7 +1215,7 @@ impl super::App {
                             cmd: None,
                             label: e.name.clone(),
                             spans,
-                            detail: rel_path(&e, &self.tabs[self.active].path),
+                            detail: { let r = rel_path(&e, &self.tabs[self.active].path); if r == e.name { String::new() } else { r } },
                             meta: format!("{} · {}", human_size(e.size), e.time_label),
                             enabled: true,
                             reason: "",
