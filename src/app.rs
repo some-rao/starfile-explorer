@@ -23,6 +23,9 @@ use crate::shell::{self, ImageCache, Img, MenuResult};
 use crate::tab::{normalize, Tab, THIS_PC};
 use crate::win::{self, DriveInfo};
 
+#[path = "palette.rs"]
+mod palette;
+
 /// Görünüm seviyeleri: 0 = Ayrıntılar, diğerleri simge boyutu (mantıksal piksel)
 const VIEW_LEVELS: [(u32, &str); 5] = [
     (0, "Ayrıntılar"),
@@ -372,6 +375,18 @@ enum Action {
     },
     Properties(PathBuf),
     OpenWith(PathBuf),
+    TogglePalette,
+    ClipboardPaths {
+        paths: Vec<PathBuf>,
+        cut: bool,
+    },
+    DeletePaths {
+        paths: Vec<PathBuf>,
+        permanent: bool,
+    },
+    RenamePath(PathBuf),
+    CopyPathOf(Vec<PathBuf>),
+    RevealPath(PathBuf),
     ShellMenu {
         extended: bool,
     },
@@ -547,6 +562,8 @@ pub struct App {
     quick_look: u8,
     /// Açık Hızlı Önizleme katmanı (Boşluk)
     quick: Option<QuickLook>,
+    /// Ctrl+K komut paleti
+    palette: Option<palette::Palette>,
     /// Bölünmüş görünüm açık mı
     split: bool,
     /// İkinci bölmenin sekmeleri (odak dışındayken)
@@ -1851,6 +1868,7 @@ impl App {
             highlight: cfg.highlight,
             quick_look: cfg.quick_look,
             quick: None,
+            palette: None,
             split: false,
             pane2: Vec::new(),
             pane2_active: 0,
@@ -2520,6 +2538,9 @@ impl App {
             {
                 self.focus_search = true;
             }
+            if shortcut(i, Modifiers::CTRL, Key::K) {
+                actions.push(Action::TogglePalette);
+            }
             if shortcut(i, Modifiers::CTRL | Modifiers::SHIFT, Key::Tab) {
                 self.active = (self.active + self.tabs.len() - 1) % self.tabs.len();
             } else if shortcut(i, Modifiers::CTRL, Key::Tab) {
@@ -3058,6 +3079,72 @@ impl App {
                 }
             }
             Action::OpenWith(p) => win::open_with(&p),
+            Action::TogglePalette => self.toggle_palette(),
+            Action::ClipboardPaths { paths, cut } => {
+                if !paths.is_empty() {
+                    win::clipboard_set_files(&paths, cut);
+                    #[cfg(not(windows))]
+                    self.ctx.copy_text(win::files_as_text(&paths));
+                    let n = paths.len();
+                    self.clipboard = Some((paths.clone(), cut));
+                    self.toast(
+                        crate::i18n::tf(
+                            "{} {} - yapistirmak icin Ctrl+V",
+                            &[
+                                &n,
+                                &if cut {
+                                    crate::i18n::t("kesildi")
+                                } else {
+                                    crate::i18n::t("kopyalandi")
+                                },
+                            ],
+                        ),
+                        false,
+                    );
+                }
+            }
+            Action::DeletePaths { paths, permanent } => {
+                if self.tab().is_home() {
+                    return;
+                }
+                if paths.is_empty() {
+                    return;
+                }
+                if permanent {
+                    self.dialog = Dialog::ConfirmDelete { paths };
+                } else {
+                    self.push_job(fsutil::spawn_delete(paths, false, ctx), true);
+                }
+            }
+            Action::RenamePath(p) => {
+                self.renaming = Some(Renaming {
+                    path: p.clone(),
+                    text: p
+                        .file_name()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                    first: true,
+                });
+            }
+            Action::CopyPathOf(paths) => {
+                let text = if paths.is_empty() {
+                    self.tab().path.to_string_lossy().into_owned()
+                } else {
+                    paths
+                        .iter()
+                        .map(|p| format!("\"{}\"", p.display()))
+                        .collect::<Vec<_>>()
+                        .join("\r\n")
+                };
+                ctx.copy_text(text);
+                self.toast(crate::i18n::t("Yol panoya kopyalandi"), false);
+            }
+            Action::RevealPath(p) => {
+                let parent = p.parent().map(|x| x.to_path_buf()).unwrap_or(p.clone());
+                let t = self.tab();
+                t.navigate(parent, true, &ctx);
+                t.select_after_load = Some(p);
+            }
             Action::ShellMenu { extended } => {
                 let mut paths = self.tab().selected_paths();
                 if paths.is_empty() && !self.tab().is_home() {
@@ -8761,6 +8848,7 @@ impl eframe::App for App {
         self.dialogs(ctx);
         self.overlays(ctx);
         self.quick_look_ui(ctx, &mut actions);
+        self.palette_ui(ctx, &mut actions);
         self.drag_overlay(ctx);
         self.draw_context_menu(ctx, &mut actions);
 
@@ -8806,6 +8894,7 @@ impl eframe::App for App {
         };
         let allow = matches!(self.dialog, Dialog::None)
             && self.menu.is_none()
+            && self.palette.is_none()
             && !ctx.input(|i| i.viewport().minimized.unwrap_or(false));
         self.web.sync(self.hwnd, want.as_ref(), allow, ctx);
         self.web_want = None;

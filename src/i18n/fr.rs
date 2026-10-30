@@ -370,4 +370,16 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Yol", "Chemin"),
     ("Önizleme hazırlanıyor…", "Préparation de l'aperçu…"),
     ("Gömülü görüntüleyici kullanılamıyor", "Visionneuse intégrée indisponible"),
-];
+    ("Alt klasörler", "Subfolders"),
+    ("Komutlar", "Commands"),
+    ("Son değiştirilenler", "Recently modified"),
+    ("Sürücü kökünde kullanılamaz", "Not available at drive root"),
+    ("Burada kullanılamaz", "Not available here"),
+    ("Birlikte aç…", "Open with…"),
+    ("İçeren klasörü aç", "Open containing folder"),
+    ("Yeni sekmede aç", "Open in new tab"),
+    ("Yeniden adlandır", "Rename"),
+    ("Yolu kopyala", "Copy path"),
+    ("Hızlı Önizleme", "Quick Look"),
+    ("Tüm sonuçları göster ({})", "Show all results ({})"),
+    ("↑↓ taşı   ↵ aç   → komutlar   Ctrl+↵ konumu göster   Esc kapat", "↑↓ move   ↵ open   → commands   Ctrl+↵ reveal   Esc close"),];

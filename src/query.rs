@@ -133,6 +133,11 @@ impl Query {
         &self.pattern
     }
 
+    /// Serbest (anahtar:değer olmayan) kelimeler; skorlama için.
+    pub fn free_terms(&self) -> &[String] {
+        &self.terms
+    }
+
     /// `i` numaralı çipi atarak sorgu metnini yeniden kurar (diğer çipler ve
     /// serbest kelimeler korunur).
     pub fn without_chip(&self, i: usize) -> String {
