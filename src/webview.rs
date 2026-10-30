@@ -1,8 +1,9 @@
-//! Gömülü PDF / ses / video görüntüleyici (Windows).
+//! Gömülü PDF / ses / video / HTML görüntüleyici (Windows).
 //!
 //! Edge WebView2 çalışma zamanı Windows 11'de kurulu gelir; PDF'yi kendi
-//! görüntüleyicisiyle açar, ses/videoyu HTML5 oynatıcıyla çalar. Görüntüleyici
-//! uygulamanın alt penceresi olarak önizleme dikdörtgenine yerleştirilir.
+//! görüntüleyicisiyle açar, ses/videoyu HTML5 oynatıcıyla çalar, yerel HTML
+//! sayfalarını tarayıcı olarak işler. Görüntüleyici uygulamanın alt penceresi
+//! olarak önizleme dikdörtgenine yerleştirilir.
 //!
 //! Oluşturma eşzamansızdır: ilk istek geldiğinde ortam/denetleyici istenir,
 //! tamamlanma geri çağrısı bir sonraki ileti pompasında çalışır ve yeniden çizim
@@ -176,7 +177,9 @@ impl WebView {
         if changed {
             if let Ok(core) = unsafe { controller.CoreWebView2() } {
                 match w.kind {
-                    MediaKind::Pdf => {
+                    // PDF ve HTML doğrudan `file:///` adresinden açılır: HTML'in
+                    // göreli CSS/görsel/script bağlantıları böylece çözülür.
+                    MediaKind::Pdf | MediaKind::Html => {
                         let uri = file_uri(&w.path);
                         unsafe {
                             let _ = core.Navigate(&HSTRING::from(uri));
@@ -387,10 +390,10 @@ fn file_uri(path: &Path) -> String {
 /// Oynatıcı sayfasının adresi; medya, ebeveyn klasörünün sanal ana bilgisayarından gelir.
 fn player_page(kind: MediaKind, path: &Path, dark: bool, accent: &str, bg: &str) -> Option<String> {
     let name = path.file_name()?.to_string_lossy();
-    let kind = if kind == MediaKind::Audio {
-        "audio"
-    } else {
-        "video"
+    let kind = match kind {
+        MediaKind::Audio => "audio",
+        MediaKind::Video => "video",
+        MediaKind::Pdf | MediaKind::Html => return None,
     };
     let theme = if dark { "dark" } else { "light" };
     Some(format!(

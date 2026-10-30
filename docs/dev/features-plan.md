@@ -496,10 +496,13 @@ Raised by the user after the six phases:
    *Önizleme hazırlanıyor…*. The child HWND is hidden while a menu or dialog is
    open, while the window is minimised, and for the side panel while Quick Look
    covers it. Bounds are DIPs, `RasterizationScale` = `pixels_per_point`.
-7. **Word / Excel / PowerPoint / ODF** — thumbnail hero plus extracted text
-   (`src/ooxml.rs`: zip + `quick-xml`; docx paragraphs/tables, pptx slides,
-   xlsx sheets with shared-string resolution, ODF `content.xml`; 200 KB cap).
-8. **Details columns** — `Değiştirme tarihi`, `Tür` and `Boyut` are left-aligned
+7. **Word / Excel / PowerPoint / ODF** — *dropped again in Post-review fixes 4*:
+   a structured text preview was not close enough to a real document, so these
+   packages now fall through to the details card exactly like a `.zip`.
+8. **HTML** — `.html`/`.htm`/`.xhtml`/`.shtml` open in the same WebView2 child
+   window as PDFs, via `file:///`, so CSS, images and scripts are rendered and
+   relative links resolve (Post-review fixes 4).
+9. **Details columns** — `Değiştirme tarihi`, `Tür` and `Boyut` are left-aligned
    (heading and cells); `Name` is content-sized (longest of four candidates over
    the first 4000 rows, +34 px, clamped 220–460 px, then shrunk to fit), `Type`
    is content-sized, and the remaining space becomes a trailing spacer column so
@@ -546,8 +549,9 @@ New i18n keys: `Klasör içeriği`, `Yol`, `Önizleme hazırlanıyor…`,
    strip, status bar and side panel follow the focused pane. No red frames.
 7. **Preview v2** — select a folder (contents list + counts), a `.txt` file
    (text), a `.pdf` (embedded viewer, scroll/zoom work), `.mp3`/`.mp4`
-   (play/pause, seek), `.docx`/`.xlsx`/`.pptx` (thumbnail + text), an `.exe`
-   (details card), and press *Birlikte aç…* on any file.
+   (play/pause, seek), a `.html` page (rendered, not source), a `.docx`/`.xlsx`/
+   `.pptx` (details card, like a `.zip`), an `.exe` (details card), and press
+   *Birlikte aç…* on any file.
 8. **Quick Look** — Space opens it over the list, Space again closes it; Esc and
    the window's ✕ also close it; ←/→ move through the folder while it is open;
    PDF/video/audio play inside the overlay.
@@ -569,7 +573,7 @@ Raised by the user after preview v2 and the first split-view fix.
 | 3 | Quick Look "so basic"; audio player "looks so bad", must autoplay, kept playing after closing | plain `Window` with a raw `<audio controls>`; WebView2 needs the autoplay flag; nothing paused the element on hide | dim backdrop + rounded card with a real header; `player.html` rebuilt (album tile, seek bar with hover knob, time labels, play/pause, volume, speed; video keeps native controls but autoplays); `--autoplay-policy=no-user-gesture-required`; `pause()` script runs whenever the child window hides |
 | 4 | Split-view button next to *Sırala* / *Görünüm*; ✕ in the pane's top-right corner | — | painted two-panel toggle in the command bar (accent when active); ✕ is an overlay hit-test at the right pane's top-right, drawn last so it wins clicks |
 | 5 | *Aç* / *Birlikte aç…* in the Quick Look header; **no** file details there for images/PDF/… | details card was drawn for every surface | buttons moved into the header (window), removed from the body on the overlay surface; metadata only for folders, archives/binaries and failures |
-| 6 | Word / Excel / PowerPoint / Markdown previews "not that great" | Office was a monospaced text dump; Markdown flattened inline runs | `ooxml::Doc { Text(Vec<Block>), Sheets, Slides }` (headings, paragraphs, bullets, tables; per-sheet grid; slide cards) rendered by the new `src/docview.rs`; Markdown paragraphs are one `LayoutJob` with accent for strong, italics, inline-code background, underlined links; header rows in accent colour |
+| 6 | Word / Excel / PowerPoint / Markdown previews "not that great" | Office was a monospaced text dump; Markdown flattened inline runs | `ooxml::Doc { Text(Vec<Block>), Sheets, Slides }` (headings, paragraphs, bullets, tables; per-sheet grid; slide cards) rendered by the new `src/docview.rs` — **both files and the structural preview were removed in Post-review fixes 4**; Markdown paragraphs are one `LayoutJob` with accent for strong, italics, inline-code background, underlined links; header rows in accent colour |
 
 Also: `WebView2` `AcceleratorKeyPressed` now forwards **Boşluk** / **Esc** to the
 app (`WebView::take_keys`), so the preview can be closed while the player has
@@ -621,14 +625,42 @@ keep them as highlighted code rather than bundle the ~3 MB Mermaid engine.
 2. **Audio** - Space on an `.mp3`: the player fills the Quick Look window (no
    large empty bands above/below), starts playing, Space closes it and the sound
    stops.
-3. **Office** - Space on a `.docx`/`.xlsx`/`.pptx`: the document text starts at
-   the top of the window (no giant icon above it) and scrolls.
+3. **Office** - ~~Space on a `.docx`/`.xlsx`/`.pptx`: the document text starts at
+   the top of the window (no giant icon above it) and scrolls.~~ Superseded by
+   Post-review fixes 4: these files now show the details card, like a `.zip`.
 4. **Markdown tables** - open `docs/dev/architecture.md` in Quick Look: the
    *File / Lines / Role / Compiled when* table (5-cell delimiter over a 4-cell
    header) now renders as a table, not as raw `|` lines; long cells wrap instead
    of running off the window.
 5. **ASCII diagrams** - `docs/dev/architecture.md` "60-second architecture"
    block fits the width (glyphs stay aligned, no horizontal scrollbar).
+
+---
+
+## Post-review fixes 4 (Office dropped, HTML rendered)
+
+Raised by the user after the round-4 build.
+
+| # | Report | Cause | Fix |
+|---|---|---|---|
+| 1 | "Quick Look can't properly preview docs, xlsx, pptx — drop the idea, show them like a folder/zip" | `src/ooxml.rs` + `src/docview.rs` rebuilt a text-only approximation of a document: no layout, no images, wrong fonts (a legacy-font `.docx` came out as mojibake). It could never match Word/Excel | the whole OOXML/ODF pipeline is deleted (`ooxml.rs`, `docview.rs`, the `zip` and `quick-xml` dependencies, `PreviewData::Office`). Office packages are binary, so `read_preview` returns `PreviewData::Binary` and `preview_body` draws `metadata_block` — the same details card a folder, `.zip` or `.exe` gets |
+| 2 | `.html` preview shows raw source | there was no HTML media kind: every file without a shell thumbnail and without a media kind fell through to the highlighted-text path | new `MediaKind::Html` (`html`, `htm`, `xhtml`, `shtml`); the WebView2 child window navigates to the page's `file:///` URI, so CSS, images, scripts and relative links work (same plumbing as PDF). Panel height is clamped 200–520 px, Quick Look fills the window, and no hero icon is drawn above the page. If WebView2 is unavailable (`web.failed()`) the preview falls back to highlighted source |
+
+`hex_color()` (`#RRGGBB`) replaces the two inline `format!` colour strings in
+`media_preview`, and `player_page()` now returns `None` for `Pdf`/`Html`
+instead of treating them as video.
+
+### Verification (round 5)
+
+1. **Office** — Space on a `.docx`, `.xlsx` and `.pptx`: each shows the details
+   card (name, type, size, dates, path) and **no** extracted text — the same
+   card as a `.zip`. The side panel shows the same card.
+2. **HTML** — Space on any saved `.html` page (ideally one with a stylesheet, an
+   `<img>` and some JavaScript): the page renders — no `<html>` source and no
+   hanging tag — and relative CSS/images load. Close with Space, then check the
+   side panel preview renders it too.
+3. **No regression** — `.pdf` still opens in the viewer, `.mp3`/`.mp4` still
+   play, a folder still shows counts + contents, a `.zip` its details card.
 
 
 

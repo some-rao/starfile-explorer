@@ -5801,8 +5801,13 @@ fn ensure_preview(store: &mut Preview, path: &Path, ctx: &egui::Context) {
     });
 }
 
-/// Metin/ofis önizlemesi için çerçeveli kaydırma alanı. `salt` her çağrı yerinin
-/// kimliğini ayırır (aynı karede iki önizleme çizilirse çakışmasın).
+/// `#RRGGBB` biçiminde renk; gömülü sayfalara (oynatıcı/HTML) aktarılır.
+fn hex_color(c: egui::Color32) -> String {
+    format!("#{:02X}{:02X}{:02X}", c.r(), c.g(), c.b())
+}
+
+/// Metin/Markdown önizlemesi için çerçeveli kaydırma alanı. `salt` her çağrı
+/// yerinin kimliğini ayırır (aynı karede iki önizleme çizilirse çakışmasın).
 fn text_frame(ui: &mut egui::Ui, max_h: f32, salt: &str, add: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::new()
         .fill(ui.visuals().extreme_bg_color)
@@ -7286,9 +7291,10 @@ impl App {
 
     /// Yan panel ile Hızlı Önizleme katmanının ortak gövdesi.
     ///
-    /// Klasörler için başlık, öğe sayıları ve içerik listesi; PDF/video/ses için
-    /// gömülü görüntüleyici; ofis belgeleri için metin; geri kalan dosyalar için
-    /// meta veri dökümü gösterilir.
+    /// Klasörler için başlık, öğe sayıları ve içerik listesi; PDF/video/ses/HTML
+    /// için gömülü görüntüleyici; Markdown ve düz metin için biçimlendirilmiş
+    /// metin; zip/ofis/kurulum gibi ikili dosyalar için meta veri dökümü
+    /// gösterilir.
     fn preview_body(
         &mut self,
         ui: &mut egui::Ui,
@@ -7312,13 +7318,14 @@ impl App {
         } else {
             crate::media::of_ext(&e.ext)
         };
-        let office = !e.is_dir && crate::ooxml::is_office(&e.ext);
         let panel = surf == PvSurface::Panel;
-        let thumb = !e.is_dir && (fsutil::has_thumbnail(&e.ext) || office);
-        // Oynatıcı hazır olduğunda büyük küçük resim gösterilmez. Ofis
-        // belgelerinde de gösterilmez: küçük resim çoğu zaman yalnızca dosya
-        // simgesidir ve belge metnini aşağı itip "boş kutu" görüntüsü veriyordu.
-        let hero = !e.is_dir && !office && (media.is_none() || !self.media_ready(media));
+        let thumb = !e.is_dir && fsutil::has_thumbnail(&e.ext);
+        // Gömülü görüntüleyici (PDF/ses/video/HTML) hazır olduğunda büyük küçük
+        // resim gösterilmez; hazırlanırken yer tutucu olarak gösterilir. HTML
+        // için hiç gösterilmez: sayfa başlığın hemen altında başlar.
+        let hero = !e.is_dir
+            && !matches!(media, Some(crate::media::MediaKind::Html))
+            && (media.is_none() || !self.media_ready(media));
         const UV: Rect = Rect {
             min: Pos2 { x: 0.0, y: 0.0 },
             max: Pos2 { x: 1.0, y: 1.0 },
@@ -7384,35 +7391,12 @@ impl App {
             return;
         }
         if let Some(k) = media {
-            self.media_preview(ui, e, k, surf);
-            return;
-        }
-        if office {
-            ensure_preview(store, &e.path, &ctx);
-            let data = store.data.lock().unwrap();
-            match data.as_ref() {
-                Some((p, PreviewData::Office(doc))) if p == &e.path => {
-                    let max_h = if panel {
-                        420.0
-                    } else {
-                        (ui.available_height() - 12.0).max(240.0)
-                    };
-                    let colors = code_colors(ui, self.accent);
-                    text_frame(ui, max_h, "office", |ui| {
-                        crate::docview::render(ui, doc, &colors, text_size(13.0));
-                    });
-                }
-                Some((p, PreviewData::Error(err))) if p == &e.path => {
-                    ui.label(
-                        RichText::new(crate::i18n::tf("Önizleme yapılamadı: {}", &[err])).weak(),
-                    );
-                    ui.add_space(6.0);
-                    metadata_block(ui, e, &type_name, &sid);
-                }
-                Some((p, _)) if p == &e.path => metadata_block(ui, e, &type_name, &sid),
-                _ => busy(ui),
+            // HTML: gömülü tarayıcı kullanılamıyorsa ham kaynak metnine düşülür
+            // (aşağıdaki metin yolu); diğer türlerde meta veri kartı yeterli.
+            if k != crate::media::MediaKind::Html || !self.web.failed() {
+                self.media_preview(ui, e, k, surf);
+                return;
             }
-            return;
         }
         // Küçük resmi olan görseller: panelde büyük görselin altına meta veri,
         // Hızlı Önizleme'de yalnızca görsel (ayrıntı kartı istenmiyor).
@@ -7484,12 +7468,7 @@ impl App {
         kind: crate::media::MediaKind,
         surf: PvSurface,
     ) {
-        let accent = format!(
-            "#{:02X}{:02X}{:02X}",
-            self.accent.r(),
-            self.accent.g(),
-            self.accent.b()
-        );
+        let accent = hex_color(self.accent);
         // Oynatıcı sayfası, çevresindeki yüzeyle aynı arka planı kullanır; böylece
         // web görünümünün kenarında renk sıçraması olmaz.
         let bgc = if surf == PvSurface::Overlay {
@@ -7497,7 +7476,7 @@ impl App {
         } else {
             ui.visuals().panel_fill
         };
-        let bg = format!("#{:02X}{:02X}{:02X}", bgc.r(), bgc.g(), bgc.b());
+        let bg = hex_color(bgc);
         if self.web.ready() {
             let h = match (surf, kind) {
                 (PvSurface::Panel, crate::media::MediaKind::Audio) => 196.0,
@@ -7505,6 +7484,14 @@ impl App {
                 // küçük bir ada gibi kalmasın.
                 (PvSurface::Overlay, crate::media::MediaKind::Audio) => {
                     (ui.available_height() - 8.0).clamp(220.0, 900.0)
+                }
+                // HTML: yan panelde okunur yükseklikte kalır (alanın tamamını
+                // kaplarsa listeye yer kalmaz), Hızlı Önizleme'de pencereyi doldurur.
+                (PvSurface::Panel, crate::media::MediaKind::Html) => {
+                    (ui.available_height() - 8.0).clamp(200.0, 520.0)
+                }
+                (PvSurface::Overlay, crate::media::MediaKind::Html) => {
+                    (ui.available_height() - 8.0).max(240.0)
                 }
                 (PvSurface::Panel, _) => (ui.available_height() - 8.0).clamp(160.0, 420.0),
                 (PvSurface::Overlay, _) => (ui.available_height() - 8.0).max(200.0),

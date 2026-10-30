@@ -3,7 +3,6 @@
 mod app;
 #[cfg(not(windows))]
 mod desktop_apps;
-mod docview;
 mod fsutil;
 mod git;
 mod highlight;
@@ -13,7 +12,6 @@ mod markdown;
 mod media;
 mod menu;
 mod newfile;
-mod ooxml;
 #[cfg(not(windows))]
 mod properties;
 mod query;
