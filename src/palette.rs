@@ -891,7 +891,7 @@ impl super::App {
             // empty state
             ui.label(
                 RichText::new(i18n::t("Son değiştirilenler"))
-                    .size(11.0)
+                    .font(super::ui_font(11.0))
                     .color(pal.weak),
             );
             let _ = ui;
@@ -900,28 +900,36 @@ impl super::App {
         for (idx, row) in rows.iter().enumerate() {
             let selected = idx == cur;
             let bg = if selected {
-                self.accent.linear_multiply(0.25)
+                self.accent.linear_multiply(0.20)
             } else {
                 Color32::TRANSPARENT
             };
             let (rect, resp) = ui.allocate_exact_size(
-                Vec2::new(ui.available_width(), 34.0 * tf),
+                Vec2::new(ui.available_width(), super::text_size(32.0)),
                 Sense::click(),
             );
             if selected || resp.hovered() {
                 ui.painter().rect_filled(
                     rect,
-                    4.0,
+                    6.0,
                     if resp.hovered() && !selected {
-                        Color32::from_gray(40)
+                        pal.hover
                     } else {
                         bg
                     },
                 );
             }
+            if selected {
+                // left accent bar
+                ui.painter().rect_filled(
+                    Rect::from_min_size(rect.min, egui::vec2(3.0, rect.height())),
+                    2.0,
+                    self.accent,
+                );
+            }
             // icon
             let icon_rect = Rect::from_min_size(
-                rect.min + Vec2::new(6.0, (34.0 * tf - 16.0) / 2.0),
+                rect.min + Vec2::new(8.0, (rect.height() - 16.0) / 2.0),
                 Vec2::splat(16.0),
             );
             if let Some(e) = &row.entry {
@@ -950,10 +958,10 @@ impl super::App {
                 );
             }
             // label with spans
-            let label_x = rect.min.x + 28.0;
+            let label_x = rect.min.x + 32.0;
             let label_rect = Rect::from_min_size(
-                Pos2::new(label_x, rect.min.y + 4.0 * tf),
-                Vec2::new(rect.width() - 120.0, 16.0 * tf),
+                Pos2::new(label_x, rect.min.y + 4.0),
+                Vec2::new(rect.width() - 120.0, super::text_size(14.0)),
             );
             let mut job = egui::text::LayoutJob::default();
             if row.spans.is_empty() {
@@ -1027,8 +1035,8 @@ impl super::App {
             // detail (relative path or shortcut)
             if !row.detail.is_empty() {
                 let drect = Rect::from_min_size(
-                    Pos2::new(label_x, rect.min.y + 18.0 * tf),
-                    Vec2::new(rect.width() - 120.0, 14.0 * tf),
+                    Pos2::new(label_x, rect.min.y + super::text_size(14.0) + 6.0),
+                    Vec2::new(rect.width() - 120.0, super::text_size(11.0)),
                 );
                 ui.painter().text(
                     drect.min,
