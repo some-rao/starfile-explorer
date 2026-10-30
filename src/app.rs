@@ -7242,6 +7242,7 @@ impl App {
         egui::Window::new(title.clone())
             // Yeni kimlik: eski (başlık çubuklu) pencerenin kayıtlı boyutu/konumu
             // devralınmasın.
+            .order(egui::Order::Foreground)
             .id(egui::Id::new("quick_look_v2"))
             .title_bar(false)
             .resizable(true)

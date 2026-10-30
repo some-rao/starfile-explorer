@@ -755,7 +755,7 @@ impl super::App {
         let screen = ctx.screen_rect();
         let backdrop = egui::Area::new(egui::Id::new("palette_backdrop"))
             .fixed_pos(screen.min)
-            .order(egui::Order::Foreground)
+            .order(egui::Order::Middle)
             .show(ctx, |ui| {
                 let (r, resp) = ui.allocate_exact_size(screen.size(), Sense::click());
                 ui.painter()
