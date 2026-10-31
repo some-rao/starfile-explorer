@@ -54,8 +54,8 @@ mod imp {
     use windows::Win32::Graphics::Dwm::{
         DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMNCRP_DISABLED,
         DWMSBT_TRANSIENTWINDOW, DWMWA_BORDER_COLOR, DWMWA_NCRENDERING_POLICY,
-        DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE,
-        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+        DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
+        DWMWCP_ROUND,
     };
     use windows::Win32::UI::Controls::MARGINS;
     use windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
