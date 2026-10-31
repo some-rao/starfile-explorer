@@ -591,6 +591,19 @@ static TABLE: &[(&str, &str)] = &[
     ("Taranıyor…", "Scanning…"),
     ("↑↓ taşı   ↵ aç   → komutlar   ← geri   Esc kapat", "↑↓ move   ↵ open   → commands   ← back   Esc close"),
     ("↑↓ taşı   ↵ aç   → komutlar   Ctrl+↵ konumu göster   Esc kapat", "↑↓ move   ↵ open   → commands   Ctrl+↵ reveal   Esc close"),
+    // Command palette - phase 2 prefixes (`>` commands, `/` path, `@` recents)
+    ("Yeni sekme", "New tab"),
+    ("Yapıştır", "Paste"),
+    ("Geri al", "Undo"),
+    ("Gizli öğeler", "Hidden items"),
+    ("Hiçbirini seçme", "Select none"),
+    ("Pano boş", "Clipboard is empty"),
+    ("Son kullanılanlar", "Recent"),
+    ("Yol yaz", "Type a path"),
+    ("Son klasör ara", "Search recent folders"),
+    ("↑↓ taşı   ↵ çalıştır   Esc kapat", "↑↓ move   ↵ run   Esc close"),
+    ("↑↓ taşı   ↵ git   Esc kapat", "↑↓ move   ↵ go   Esc close"),
+    ("↑↓ taşı   ↵ aç   Esc kapat", "↑↓ move   ↵ open   Esc close"),
 ];
 
 #[cfg(test)]

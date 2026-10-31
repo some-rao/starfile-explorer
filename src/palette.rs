@@ -5,9 +5,11 @@
 //!
 //! The palette has two levels:
 //!
-//! * `Files` - entries from the current folder. `;` widens the scope to
-//!   subfolders and `;;` to this PC; the prefix lives in the query text, so the
-//!   scope can never drift away from what the user typed.
+//! * `Files` - the entry-oriented level. A leading symbol picks what it lists:
+//!   nothing (or `;` / `;;`) searches entries in the current folder / its
+//!   subfolders / this PC, `>` lists application commands, `/` jumps to a path
+//!   and `@` lists recent folders. The prefix lives in the query text, so the
+//!   mode can never drift away from what the user typed.
 //! * `Actions` - the commands that apply to one highlighted entry. `→` enters
 //!   this level, `←` (or backspace on an empty filter) returns to the results.
 //!
@@ -15,7 +17,8 @@
 //! the rest of the application (`pal`, `ui_font`, `text_size`), so the overlay
 //! looks like another surface of the app rather than a separate dialog.
 
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
@@ -66,6 +69,10 @@ pub enum Mode {
 pub enum RowKind {
     Entry(Entry),
     Command(ItemCmd),
+    /// An application-level command, listed under the `>` prefix.
+    App(AppCmd),
+    /// A path the palette can navigate to (`/` path jump and `@` recent folders).
+    Jump(PathBuf),
     /// Hands the query over to the toolbar search (current folder only).
     ShowAll,
 }
@@ -94,6 +101,46 @@ pub enum ItemCmd {
     CopyPath,
     Properties,
     Preview,
+}
+
+/// An application command listed by the `>` prefix. Every variant maps to an
+/// existing [`Action`], so the palette adds no new behaviour of its own.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum AppCmd {
+    NewTab,
+    NewWindow,
+    CloseTab,
+    NewFolder,
+    NewTextDoc,
+    Undo,
+    Refresh,
+    Up,
+    SelectAll,
+    SelectNone,
+    InvertSelection,
+    Copy,
+    Cut,
+    Paste,
+    /// View level index into `VIEW_LEVELS`.
+    View(usize),
+    Sort(fsutil::SortKey),
+    ToggleHidden,
+    ToggleExt,
+    TogglePreview,
+    ToggleDetails,
+    ToggleSplit,
+    ToggleGit,
+    ToggleHighlight,
+    GoHome,
+    GoThisPc,
+    GoGallery,
+    /// Index into `App::known`.
+    Known(usize),
+    Terminal,
+    Properties,
+    CopyPath,
+    CalcSize,
+    Peek,
 }
 
 pub struct Scan {
@@ -141,21 +188,76 @@ impl Palette {
 
 // ---------------------------------------------------------------- parsing
 
-/// Splits the scope prefix from the free-text query. A leading `;` is only a
-/// prefix when it is alone or followed by a space, so a file named
-/// `;notes.txt` can still be searched.
-pub fn parse_prefix(text: &str) -> (SearchScope, &str) {
+/// What the palette lists, derived from the query's leading symbol. Keeping it
+/// in the text means the mode can never drift away from what the user typed.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Prefix {
+    /// File search in a scope. `;` widens it to subfolders and `;;` to this PC.
+    Files(SearchScope),
+    /// `>` application commands.
+    Commands,
+    /// `/` path jump.
+    Path,
+    /// `@` recent folders.
+    Recents,
+}
+
+/// Splits the leading prefix from the free-text query. `;` / `;;` are only a
+/// prefix when alone or followed by a space, so a file named `;notes.txt` can
+/// still be searched; `>` / `/` / `@` are immediate prefixes.
+pub fn parse_prefix(text: &str) -> (Prefix, &str) {
     if let Some(rest) = text.strip_prefix(";;") {
         if rest.is_empty() || rest.starts_with(char::is_whitespace) {
-            return (SearchScope::ThisPc, rest.trim_start());
+            return (Prefix::Files(SearchScope::ThisPc), rest.trim_start());
         }
     }
     if let Some(rest) = text.strip_prefix(';') {
         if rest.is_empty() || rest.starts_with(char::is_whitespace) {
-            return (SearchScope::Subfolders, rest.trim_start());
+            return (Prefix::Files(SearchScope::Subfolders), rest.trim_start());
         }
     }
-    (SearchScope::Folder, text)
+    if let Some(rest) = text.strip_prefix('>') {
+        return (Prefix::Commands, rest.trim_start());
+    }
+    if let Some(rest) = text.strip_prefix('/') {
+        return (Prefix::Path, rest.trim_start());
+    }
+    if let Some(rest) = text.strip_prefix('@') {
+        return (Prefix::Recents, rest.trim_start());
+    }
+    (Prefix::Files(SearchScope::Folder), text)
+}
+
+/// The pill that names what the palette currently lists.
+fn prefix_label(prefix: Prefix) -> &'static str {
+    match prefix {
+        Prefix::Files(SearchScope::Folder) => "Bu klasör",
+        Prefix::Files(SearchScope::Subfolders) => "Alt klasörler",
+        Prefix::Files(SearchScope::ThisPc) => "Bu bilgisayar",
+        Prefix::Commands => "Komutlar",
+        Prefix::Path => "Yol",
+        Prefix::Recents => "Son kullanılanlar",
+    }
+}
+
+/// Placeholder shown inside the empty input for the current prefix.
+fn prefix_hint(prefix: Prefix) -> &'static str {
+    match prefix {
+        Prefix::Files(_) => "Dosya veya klasör ara",
+        Prefix::Commands => "Komut ara",
+        Prefix::Path => "Yol yaz",
+        Prefix::Recents => "Son klasör ara",
+    }
+}
+
+/// Footer key legend for the current prefix.
+fn prefix_footer(prefix: Prefix) -> &'static str {
+    match prefix {
+        Prefix::Files(_) => "↑↓ taşı   ↵ aç   → komutlar   ← geri   Esc kapat",
+        Prefix::Commands => "↑↓ taşı   ↵ çalıştır   Esc kapat",
+        Prefix::Path => "↑↓ taşı   ↵ git   Esc kapat",
+        Prefix::Recents => "↑↓ taşı   ↵ aç   Esc kapat",
+    }
 }
 
 fn prefix_for(scope: SearchScope) -> &'static str {
@@ -335,6 +437,292 @@ fn command_disabled(command: ItemCmd, entry: &Entry, app: &App) -> Option<&'stat
     }
 }
 
+// ---------------------------------------------------------------- app commands
+
+/// The `>` command list, grouped the way Explorer's menus are.
+pub fn app_commands(known: usize) -> Vec<AppCmd> {
+    let mut commands = vec![
+        AppCmd::NewTab,
+        AppCmd::NewWindow,
+        AppCmd::CloseTab,
+        AppCmd::NewFolder,
+        AppCmd::NewTextDoc,
+        AppCmd::Undo,
+        AppCmd::Refresh,
+        AppCmd::Up,
+        AppCmd::SelectAll,
+        AppCmd::SelectNone,
+        AppCmd::InvertSelection,
+        AppCmd::Copy,
+        AppCmd::Cut,
+        AppCmd::Paste,
+    ];
+    for level in 0..VIEW_LEVELS.len() {
+        commands.push(AppCmd::View(level));
+    }
+    for key in [
+        fsutil::SortKey::Name,
+        fsutil::SortKey::Modified,
+        fsutil::SortKey::Type,
+        fsutil::SortKey::Size,
+    ] {
+        commands.push(AppCmd::Sort(key));
+    }
+    commands.extend([
+        AppCmd::ToggleHidden,
+        AppCmd::ToggleExt,
+        AppCmd::TogglePreview,
+        AppCmd::ToggleDetails,
+        AppCmd::ToggleSplit,
+        AppCmd::ToggleGit,
+        AppCmd::ToggleHighlight,
+        AppCmd::GoHome,
+        AppCmd::GoThisPc,
+        AppCmd::GoGallery,
+    ]);
+    for index in 0..known {
+        commands.push(AppCmd::Known(index));
+    }
+    commands.extend([
+        AppCmd::Terminal,
+        AppCmd::Properties,
+        AppCmd::CopyPath,
+        AppCmd::CalcSize,
+        AppCmd::Peek,
+    ]);
+    commands
+}
+
+fn sort_label(key: fsutil::SortKey) -> &'static str {
+    match key {
+        fsutil::SortKey::Name => "Ad",
+        fsutil::SortKey::Modified => "Değiştirme tarihi",
+        fsutil::SortKey::Type => "Tür",
+        fsutil::SortKey::Size => "Boyut",
+    }
+}
+
+fn app_cmd_label(cmd: AppCmd, app: &App) -> String {
+    match cmd {
+        AppCmd::NewTab => i18n::t("Yeni sekme").into(),
+        AppCmd::NewWindow => i18n::t("Yeni pencere").into(),
+        AppCmd::CloseTab => i18n::t("Sekmeyi kapat").into(),
+        AppCmd::NewFolder => i18n::t("Yeni klasör").into(),
+        AppCmd::NewTextDoc => i18n::t("Metin Belgesi").into(),
+        AppCmd::Undo => i18n::t("Geri al").into(),
+        AppCmd::Refresh => i18n::t("Yenile").into(),
+        AppCmd::Up => i18n::t("Üst klasör").into(),
+        AppCmd::SelectAll => i18n::t("Tümünü seç").into(),
+        AppCmd::SelectNone => i18n::t("Hiçbirini seçme").into(),
+        AppCmd::InvertSelection => i18n::t("Seçimi tersine çevir").into(),
+        AppCmd::Copy => i18n::t("Kopyala").into(),
+        AppCmd::Cut => i18n::t("Kes").into(),
+        AppCmd::Paste => i18n::t("Yapıştır").into(),
+        AppCmd::View(level) => {
+            let level = level.min(VIEW_LEVELS.len() - 1);
+            i18n::t(VIEW_LEVELS[level].1).into()
+        }
+        AppCmd::Sort(key) => i18n::t(sort_label(key)).into(),
+        AppCmd::ToggleHidden => i18n::t("Gizli öğeler").into(),
+        AppCmd::ToggleExt => i18n::t("Dosya adı uzantıları").into(),
+        AppCmd::TogglePreview => i18n::t("Önizleme bölmesi").into(),
+        AppCmd::ToggleDetails => i18n::t("Ayrıntılar bölmesi").into(),
+        AppCmd::ToggleSplit => i18n::t("Bölünmüş görünüm").into(),
+        AppCmd::ToggleGit => i18n::t("Git sütununu göster").into(),
+        AppCmd::ToggleHighlight => i18n::t("Kod vurgulama").into(),
+        AppCmd::GoHome => i18n::t("Giriş").into(),
+        AppCmd::GoThisPc => i18n::t("Bu bilgisayar").into(),
+        AppCmd::GoGallery => i18n::t("Galeri").into(),
+        AppCmd::Known(index) => app
+            .known
+            .get(index)
+            .map(|known| known.1.to_string())
+            .unwrap_or_default(),
+        AppCmd::Terminal => i18n::t("Terminalde aç").into(),
+        AppCmd::Properties => i18n::t("Özellikler").into(),
+        AppCmd::CopyPath => i18n::t("Yolu kopyala").into(),
+        AppCmd::CalcSize => i18n::t("Klasör boyutlarını hesapla").into(),
+        AppCmd::Peek => i18n::t("Hızlı Önizleme").into(),
+    }
+}
+
+/// `Some(reason)` when the application command cannot run right now.
+fn app_cmd_disabled(cmd: AppCmd, app: &App) -> Option<&'static str> {
+    let virtual_location = crate::tab::is_virtual(&app.tabs[app.active].path);
+    let here_reason = "Burada kullanılamaz";
+    match cmd {
+        AppCmd::Paste => {
+            if virtual_location {
+                Some(here_reason)
+            } else if app.clipboard.is_none() {
+                Some("Pano boş")
+            } else {
+                None
+            }
+        }
+        AppCmd::Undo => {
+            if app.undo.is_empty() {
+                Some("Geri alınacak bir işlem yok")
+            } else {
+                None
+            }
+        }
+        AppCmd::NewFolder
+        | AppCmd::NewTextDoc
+        | AppCmd::Terminal
+        | AppCmd::Properties
+        | AppCmd::CopyPath
+        | AppCmd::CalcSize => {
+            if virtual_location {
+                Some(here_reason)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// The action an application command maps to. Every variant reuses an existing
+/// [`Action`]; the palette only decides which one and for which folder.
+fn app_cmd_action(cmd: AppCmd, app: &App) -> Action {
+    let current = app.tabs[app.active].path.clone();
+    match cmd {
+        AppCmd::NewTab => Action::NewTab(PathBuf::new()),
+        AppCmd::NewWindow => Action::NewWindow,
+        AppCmd::CloseTab => Action::CloseTab(app.active),
+        AppCmd::NewFolder => Action::NewFolder,
+        AppCmd::NewTextDoc => Action::New(1),
+        AppCmd::Undo => Action::Undo,
+        AppCmd::Refresh => Action::Refresh,
+        AppCmd::Up => Action::Up,
+        AppCmd::SelectAll => Action::SelectAll,
+        AppCmd::SelectNone => Action::SelectNone,
+        AppCmd::InvertSelection => Action::InvertSelection,
+        AppCmd::Copy => Action::Copy,
+        AppCmd::Cut => Action::Cut,
+        AppCmd::Paste => Action::Paste,
+        AppCmd::View(level) => Action::SetView(level),
+        AppCmd::Sort(key) => Action::Sort(key),
+        AppCmd::ToggleHidden => Action::ToggleHidden,
+        AppCmd::ToggleExt => Action::ToggleExt,
+        AppCmd::TogglePreview => Action::TogglePreview,
+        AppCmd::ToggleDetails => Action::ToggleDetails,
+        AppCmd::ToggleSplit => Action::ToggleSplit,
+        AppCmd::ToggleGit => Action::ToggleGitColumn,
+        AppCmd::ToggleHighlight => Action::ToggleHighlight,
+        AppCmd::GoHome => Action::Navigate(PathBuf::new()),
+        AppCmd::GoThisPc => Action::Navigate(PathBuf::from(THIS_PC)),
+        AppCmd::GoGallery => Action::Navigate(PathBuf::from(crate::tab::GALLERY)),
+        AppCmd::Known(index) => Action::Navigate(
+            app.known
+                .get(index)
+                .map(|known| known.2.clone())
+                .unwrap_or_default(),
+        ),
+        AppCmd::Terminal => Action::Terminal(current),
+        AppCmd::Properties => Action::Properties(current),
+        AppCmd::CopyPath => Action::CopyPath,
+        AppCmd::CalcSize => Action::CalcSize,
+        AppCmd::Peek => Action::Peek,
+    }
+}
+
+// ---------------------------------------------------------------- path jump
+
+/// Splits a filter into lowercased whitespace-separated terms.
+fn query_terms(text: &str) -> Vec<String> {
+    text.split_whitespace().map(str::to_lowercase).collect()
+}
+
+/// Label for a path that has no `Entry` behind it (drives, bookmarks, recents).
+fn jump_label(path: &Path) -> String {
+    if path.as_os_str().is_empty() {
+        return i18n::t("Giriş").into();
+    }
+    if path.as_os_str() == THIS_PC {
+        return i18n::t("Bu bilgisayar").into();
+    }
+    if path.as_os_str() == crate::tab::GALLERY {
+        return i18n::t("Galeri").into();
+    }
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| {
+            path.to_string_lossy()
+                .trim_end_matches(['\\', '/'])
+                .to_string()
+        })
+}
+
+/// Expands a typed path the way Explorer's address bar would: `~` is the home
+/// directory, `%VAR%` is an environment variable and a relative path is taken
+/// from the open folder. No I/O: whether it exists is decided by the navigation
+/// action, which reports a missing path with a toast.
+fn resolve_path(input: &str, current: &Path) -> PathBuf {
+    let trimmed = input.trim().trim_matches('"').trim();
+    if trimmed.is_empty() {
+        return current.to_path_buf();
+    }
+    if let Some(home) = dirs::home_dir() {
+        if trimmed == "~" {
+            return home;
+        }
+        if let Some(rest) = trimmed
+            .strip_prefix("~/")
+            .or_else(|| trimmed.strip_prefix("~\\"))
+        {
+            return if rest.is_empty() {
+                home
+            } else {
+                home.join(rest)
+            };
+        }
+    }
+    let expanded = expand_env(trimmed);
+    let path = PathBuf::from(&expanded);
+    if path.is_absolute() {
+        return path;
+    }
+    // `C:` on its own is drive-relative; a bare drive letter means its root.
+    let bytes = expanded.as_bytes();
+    if expanded.len() == 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+        return PathBuf::from(format!("{expanded}/"));
+    }
+    current.join(path)
+}
+
+/// Replaces `%NAME%` with the environment variable, leaving unknown or lone
+/// `%` characters untouched.
+fn expand_env(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut rest = input;
+    while let Some(start) = rest.find('%') {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + 1..];
+        match after.find('%') {
+            Some(end) if end > 0 => {
+                let name = &after[..end];
+                match std::env::var(name) {
+                    Ok(value) => out.push_str(&value),
+                    Err(_) => {
+                        out.push('%');
+                        out.push_str(name);
+                        out.push('%');
+                    }
+                }
+                rest = &after[end + 1..];
+            }
+            _ => {
+                out.push('%');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 // ---------------------------------------------------------------- app glue
 
 impl super::App {
@@ -478,30 +866,43 @@ impl super::App {
         }
     }
 
+    fn palette_cancel_scan(&mut self) {
+        let Some(palette) = self.palette.as_mut() else {
+            return;
+        };
+        if let Some(scan) = &palette.scan {
+            scan.handle.cancel.store(true, Ordering::Relaxed);
+        }
+        if palette.scan.take().is_some() {
+            palette.dirty = true;
+        }
+    }
+
     fn palette_start_scan(&mut self, ctx: &egui::Context) {
         let (scope, rest) = {
             let Some(palette) = self.palette.as_ref() else {
                 return;
             };
             match palette.mode {
-                Mode::Files => {
-                    let (scope, rest) = parse_prefix(&palette.text);
-                    (scope, rest.trim().to_string())
-                }
-                Mode::Actions(_) => (SearchScope::Folder, String::new()),
+                Mode::Files => match parse_prefix(&palette.text) {
+                    (Prefix::Files(scope), rest) => (Some(scope), rest.trim().to_string()),
+                    _ => (None, String::new()),
+                },
+                Mode::Actions(_) => (None, String::new()),
             }
         };
 
-        if !matches!(scope, SearchScope::Subfolders | SearchScope::ThisPc) || rest.is_empty() {
-            let Some(palette) = self.palette.as_mut() else {
+        let scope = match scope {
+            Some(SearchScope::Subfolders) => SearchScope::Subfolders,
+            Some(SearchScope::ThisPc) => SearchScope::ThisPc,
+            _ => {
+                self.palette_cancel_scan();
                 return;
-            };
-            if let Some(scan) = &palette.scan {
-                scan.handle.cancel.store(true, Ordering::Relaxed);
             }
-            if palette.scan.take().is_some() {
-                palette.dirty = true;
-            }
+        };
+
+        if rest.is_empty() {
+            self.palette_cancel_scan();
             return;
         }
 
@@ -565,7 +966,7 @@ impl super::App {
     // ------------------------------------------------------------ keys
 
     fn palette_keys(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
-        let (files_mode, text, empty) = {
+        let (files_mode, text, empty, drillable) = {
             let Some(palette) = self.palette.as_ref() else {
                 return;
             };
@@ -573,6 +974,13 @@ impl super::App {
                 matches!(palette.mode, Mode::Files),
                 palette.text.clone(),
                 palette.text.is_empty(),
+                // `→` only drills when there is an entry row to drill into, so
+                // the key is left to the text edit in the `>` / `/` / `@` lists.
+                palette
+                    .rows
+                    .get(palette.cursor)
+                    .map(|row| matches!(row.kind, RowKind::Entry(_)))
+                    .unwrap_or(false),
             )
         };
 
@@ -625,11 +1033,9 @@ impl super::App {
             if plain {
                 if files_mode {
                     // `→` drills into the item commands only when the caret is
-                    // already at the end of the query; otherwise the text edit
-                    // gets the key and moves the caret as usual.
-                    if input.key_pressed(Key::ArrowRight)
-                        && caret_end
-                        && input.consume_key(Modifiers::NONE, Key::ArrowRight)
+                    // already at the end of the query and an entry is selected;
+                    // otherwise the text edit gets the key and moves the caret.
+                    if drillable && caret_end && input.consume_key(Modifiers::NONE, Key::ArrowRight)
                     {
                         drill = true;
                     }
@@ -706,8 +1112,12 @@ impl super::App {
             if !matches!(palette.mode, Mode::Files) {
                 return;
             }
-            let (scope, rest) = parse_prefix(&palette.text);
-            (scope, rest.to_string())
+            // Scope cycling only applies to the file-search prefix; the `>` / `/`
+            // / `@` modes have no scope to cycle.
+            match parse_prefix(&palette.text) {
+                (Prefix::Files(scope), rest) => (scope, rest.to_string()),
+                _ => return,
+            }
         };
         let scope = if backwards {
             prev_scope(scope)
@@ -813,6 +1223,15 @@ impl super::App {
                     self.close_palette();
                     actions.push(Action::OpenEntry(entry.path, entry.is_dir));
                 }
+                RowKind::Jump(path) => {
+                    self.close_palette();
+                    actions.push(Action::Navigate(path));
+                }
+                RowKind::App(cmd) => {
+                    let action = app_cmd_action(cmd, self);
+                    self.close_palette();
+                    actions.push(action);
+                }
                 RowKind::ShowAll => {
                     let filter = self
                         .palette
@@ -872,85 +1291,18 @@ impl super::App {
         };
         let base = self.tabs[self.active].path.clone();
         let show_hidden = self.show_hidden;
-        let mut rows: Vec<Row> = Vec::new();
 
-        match mode {
-            Mode::Files => {
-                let (scope, rest) = parse_prefix(&text);
-                let rest = rest.trim();
-                if rest.is_empty() {
-                    let mut recent: Vec<&Entry> = self.tabs[self.active]
-                        .entries
-                        .iter()
-                        .filter(|entry| show_hidden || !entry.hidden)
-                        .collect();
-                    recent.sort_by_key(|entry| std::cmp::Reverse(entry.modified));
-                    for entry in recent.into_iter().take(RECENT_ROWS) {
-                        rows.push(Row::file(entry, &base, Vec::new()));
-                    }
-                } else {
-                    let query = Query::parse(rest);
-                    let now = chrono::Local::now();
-                    let source: Vec<Entry> = match scope {
-                        SearchScope::Folder => self.tabs[self.active].entries.clone(),
-                        SearchScope::Subfolders | SearchScope::ThisPc => self
-                            .palette
-                            .as_ref()
-                            .and_then(|palette| palette.scan.as_ref())
-                            .map(|scan| scan.found.clone())
-                            .unwrap_or_default(),
-                    };
-
-                    // Glob terms are already enforced by `Query`; scoring them
-                    // would fail because `*` and `?` are not in the name.
-                    let terms: Vec<String> = query
-                        .free_terms()
-                        .iter()
-                        .filter(|term| !term.contains('*') && !term.contains('?'))
-                        .cloned()
-                        .collect();
-
-                    let mut candidates: Vec<Candidate> = Vec::new();
-                    for entry in source {
-                        if !show_hidden && entry.hidden {
-                            continue;
-                        }
-                        if !query.matches(&entry, now) {
-                            continue;
-                        }
-                        let (mut value, spans) =
-                            score(&entry.name_lower, &terms).unwrap_or((0, Vec::new()));
-                        if entry.is_dir {
-                            value += 60;
-                        }
-                        candidates.push((entry, value, spans));
-                    }
-                    candidates.sort_by(|a, b| {
-                        b.1.cmp(&a.1)
-                            .then_with(|| b.0.is_dir.cmp(&a.0.is_dir))
-                            .then_with(|| fsutil::natural_cmp(&a.0.name_lower, &b.0.name_lower))
-                    });
-
-                    let total = candidates.len();
-                    for (entry, _, spans) in candidates.into_iter().take(MAX_ROWS) {
-                        rows.push(Row::file(&entry, &base, spans));
-                    }
-                    // The toolbar filter only sees the current folder, so a
-                    // "show all" hand-off only makes sense there.
-                    if scope == SearchScope::Folder && total > MAX_ROWS {
-                        rows.push(Row {
-                            kind: RowKind::ShowAll,
-                            label: i18n::tf("Tüm sonuçları göster ({})", &[&total.to_string()]),
-                            spans: Vec::new(),
-                            detail: String::new(),
-                            meta: String::new(),
-                            enabled: true,
-                            reason: "",
-                        });
-                    }
+        let rows: Vec<Row> = match mode {
+            Mode::Files => match parse_prefix(&text) {
+                (Prefix::Files(scope), rest) => {
+                    self.collect_file_rows(scope, rest.trim(), &base, show_hidden)
                 }
-            }
+                (Prefix::Commands, rest) => self.collect_command_rows(rest),
+                (Prefix::Path, rest) => self.collect_path_rows(rest, &base, show_hidden),
+                (Prefix::Recents, rest) => self.collect_recent_rows(rest),
+            },
             Mode::Actions(target) => {
+                let mut rows = Vec::new();
                 let filter = text.to_lowercase();
                 for command in item_commands(&target) {
                     let label = i18n::t(cmd_label(command)).to_string();
@@ -968,8 +1320,9 @@ impl super::App {
                         reason: reason.unwrap_or(""),
                     });
                 }
+                rows
             }
-        }
+        };
 
         let Some(palette) = self.palette.as_mut() else {
             return;
@@ -988,6 +1341,241 @@ impl super::App {
                 "commands"
             }
         ));
+    }
+
+    /// Entries from the open folder (or the running scan for a wider scope).
+    /// With an empty filter the six most recently modified entries are listed.
+    fn collect_file_rows(
+        &self,
+        scope: SearchScope,
+        rest: &str,
+        base: &Path,
+        show_hidden: bool,
+    ) -> Vec<Row> {
+        let mut rows: Vec<Row> = Vec::new();
+        if rest.is_empty() {
+            let mut recent: Vec<&Entry> = self.tabs[self.active]
+                .entries
+                .iter()
+                .filter(|entry| show_hidden || !entry.hidden)
+                .collect();
+            recent.sort_by_key(|entry| std::cmp::Reverse(entry.modified));
+            for entry in recent.into_iter().take(RECENT_ROWS) {
+                rows.push(Row::file(entry, base, Vec::new()));
+            }
+            return rows;
+        }
+
+        let query = Query::parse(rest);
+        let now = chrono::Local::now();
+        let source: Vec<Entry> = match scope {
+            SearchScope::Folder => self.tabs[self.active].entries.clone(),
+            SearchScope::Subfolders | SearchScope::ThisPc => self
+                .palette
+                .as_ref()
+                .and_then(|palette| palette.scan.as_ref())
+                .map(|scan| scan.found.clone())
+                .unwrap_or_default(),
+        };
+
+        // Glob terms are already enforced by `Query`; scoring them would fail
+        // because `*` and `?` are not in the name.
+        let terms: Vec<String> = query
+            .free_terms()
+            .iter()
+            .filter(|term| !term.contains('*') && !term.contains('?'))
+            .cloned()
+            .collect();
+
+        let mut candidates: Vec<Candidate> = Vec::new();
+        for entry in source {
+            if !show_hidden && entry.hidden {
+                continue;
+            }
+            if !query.matches(&entry, now) {
+                continue;
+            }
+            let (mut value, spans) = score(&entry.name_lower, &terms).unwrap_or((0, Vec::new()));
+            if entry.is_dir {
+                value += 60;
+            }
+            candidates.push((entry, value, spans));
+        }
+        candidates.sort_by(|a, b| {
+            b.1.cmp(&a.1)
+                .then_with(|| b.0.is_dir.cmp(&a.0.is_dir))
+                .then_with(|| fsutil::natural_cmp(&a.0.name_lower, &b.0.name_lower))
+        });
+
+        let total = candidates.len();
+        for (entry, _, spans) in candidates.into_iter().take(MAX_ROWS) {
+            rows.push(Row::file(&entry, base, spans));
+        }
+        // The toolbar filter only sees the current folder, so a "show all"
+        // hand-off only makes sense there.
+        if scope == SearchScope::Folder && total > MAX_ROWS {
+            rows.push(Row {
+                kind: RowKind::ShowAll,
+                label: i18n::tf("Tüm sonuçları göster ({})", &[&total.to_string()]),
+                spans: Vec::new(),
+                detail: String::new(),
+                meta: String::new(),
+                enabled: true,
+                reason: "",
+            });
+        }
+        rows
+    }
+
+    /// Application commands, fuzzy-filtered by the text after `>`.
+    fn collect_command_rows(&self, rest: &str) -> Vec<Row> {
+        let terms = query_terms(rest);
+        let mut rows = Vec::new();
+        for command in app_commands(self.known.len()) {
+            let label = app_cmd_label(command, self);
+            let Some((_, spans)) = score(&label.to_lowercase(), &terms) else {
+                continue;
+            };
+            let reason = app_cmd_disabled(command, self);
+            rows.push(Row::app(command, label, spans, reason));
+        }
+        rows
+    }
+
+    /// Path-jump targets for the `/` prefix: the typed path itself first, then
+    /// matching drives, known folders, subfolders, bookmarks and recents.
+    fn collect_path_rows(&self, rest: &str, current: &Path, show_hidden: bool) -> Vec<Row> {
+        let terms = query_terms(rest);
+        let mut rows: Vec<Row> = Vec::new();
+
+        // What the user is spelling is always the first row, even before it
+        // matches anything else in the list.
+        let typed = if rest.trim().is_empty() {
+            None
+        } else {
+            Some(resolve_path(rest, current))
+        };
+        if let Some(path) = &typed {
+            rows.push(Row::jump(
+                path.clone(),
+                jump_label(path),
+                path.to_string_lossy().into_owned(),
+                Vec::new(),
+            ));
+        }
+
+        let mut seen: HashSet<PathBuf> = HashSet::new();
+        if let Some(path) = &typed {
+            seen.insert(path.clone());
+        }
+        let mut candidates: Vec<(PathBuf, String, String)> = Vec::new();
+
+        let drives: Vec<(PathBuf, String)> = self
+            .drives
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|drive| (drive.root.clone(), drive.label.clone()))
+            .collect();
+        for (root, label) in drives {
+            push_unique(
+                &mut seen,
+                &mut candidates,
+                root.clone(),
+                jump_label(&root),
+                label,
+            );
+        }
+        for (_, name, path) in &self.known {
+            push_unique(
+                &mut seen,
+                &mut candidates,
+                path.clone(),
+                name.to_string(),
+                path.to_string_lossy().into_owned(),
+            );
+        }
+        // Subfolders only help while a filter is being typed; listing all of
+        // them for an empty query would drown the quick places above.
+        if !rest.trim().is_empty() {
+            for entry in self.tabs[self.active].entries.iter() {
+                if !entry.is_dir || (!show_hidden && entry.hidden) {
+                    continue;
+                }
+                push_unique(
+                    &mut seen,
+                    &mut candidates,
+                    entry.path.clone(),
+                    entry.name.clone(),
+                    String::new(),
+                );
+            }
+        }
+        for path in self.bookmarks.iter().chain(self.recent.iter()) {
+            push_unique(
+                &mut seen,
+                &mut candidates,
+                path.clone(),
+                jump_label(path),
+                path.to_string_lossy().into_owned(),
+            );
+        }
+
+        let mut matched: Vec<(i32, Row)> = Vec::new();
+        for (path, label, detail) in candidates {
+            let label_lower = label.to_lowercase();
+            let path_lower = path.to_string_lossy().to_lowercase();
+            let Some((value, spans)) = match_label(&label_lower, &path_lower, &terms) else {
+                continue;
+            };
+            matched.push((value, Row::jump(path, label, detail, spans)));
+        }
+        matched.sort_by(|a, b| {
+            b.0.cmp(&a.0).then_with(|| {
+                fsutil::natural_cmp(&a.1.label.to_lowercase(), &b.1.label.to_lowercase())
+            })
+        });
+        for (_, row) in matched
+            .into_iter()
+            .take(MAX_ROWS.saturating_sub(rows.len()))
+        {
+            rows.push(row);
+        }
+        rows.truncate(MAX_ROWS);
+        rows
+    }
+
+    /// Recent folders (`@`), most recent first, filtered by text.
+    fn collect_recent_rows(&self, rest: &str) -> Vec<Row> {
+        let terms = query_terms(rest);
+        let mut seen: HashSet<PathBuf> = HashSet::new();
+        let mut candidates: Vec<(PathBuf, String, String)> = Vec::new();
+        for path in self.recent.iter().chain(self.bookmarks.iter()) {
+            push_unique(
+                &mut seen,
+                &mut candidates,
+                path.clone(),
+                jump_label(path),
+                path.to_string_lossy().into_owned(),
+            );
+        }
+
+        let mut matched: Vec<(i32, Row)> = Vec::new();
+        for (path, label, detail) in candidates {
+            let label_lower = label.to_lowercase();
+            let path_lower = path.to_string_lossy().to_lowercase();
+            let Some((value, spans)) = match_label(&label_lower, &path_lower, &terms) else {
+                continue;
+            };
+            matched.push((value, Row::jump(path, label, detail, spans)));
+        }
+        // Stable sort: equal scores keep the recency order.
+        matched.sort_by_key(|(value, _)| std::cmp::Reverse(*value));
+        matched
+            .into_iter()
+            .take(MAX_ROWS)
+            .map(|(_, row)| row)
+            .collect()
     }
 
     // ------------------------------------------------------------ drawing
@@ -1093,15 +1681,10 @@ impl super::App {
             };
             match &state.mode {
                 Mode::Files => {
-                    let (scope, _) = parse_prefix(&state.text);
-                    let label = match scope {
-                        SearchScope::Folder => i18n::t("Bu klasör"),
-                        SearchScope::Subfolders => i18n::t("Alt klasörler"),
-                        SearchScope::ThisPc => i18n::t("Bu bilgisayar"),
-                    };
+                    let (prefix, _) = parse_prefix(&state.text);
                     (
-                        label.to_string(),
-                        i18n::t("Dosya veya klasör ara").to_string(),
+                        i18n::t(prefix_label(prefix)).to_string(),
+                        i18n::t(prefix_hint(prefix)).to_string(),
                         None,
                     )
                 }
@@ -1201,16 +1784,27 @@ impl super::App {
     fn palette_rows(&mut self, ui: &mut egui::Ui, palette: &super::Pal) -> Option<usize> {
         let (rows, cursor, scroll_to, show_header, waiting) = {
             let state = self.palette.as_ref()?;
-            let (scope, rest) = parse_prefix(&state.text);
+            let (prefix, rest) = parse_prefix(&state.text);
             let files_mode = matches!(state.mode, Mode::Files);
-            let waiting = files_mode
-                && matches!(scope, SearchScope::Subfolders | SearchScope::ThisPc)
-                && !rest.trim().is_empty();
+            let mut waiting = false;
+            let mut show_header = false;
+            if files_mode {
+                match prefix {
+                    Prefix::Files(scope) => {
+                        waiting = matches!(scope, SearchScope::Subfolders | SearchScope::ThisPc)
+                            && !rest.trim().is_empty();
+                        show_header = scope == SearchScope::Folder && rest.trim().is_empty();
+                    }
+                    // The `>` / `/` / `@` lists have no "recently modified"
+                    // heading; their pill already names them.
+                    Prefix::Commands | Prefix::Path | Prefix::Recents => {}
+                }
+            }
             (
                 state.rows.clone(),
                 state.cursor,
                 state.scroll_to,
-                files_mode && rest.trim().is_empty(),
+                show_header,
                 waiting,
             )
         };
@@ -1298,7 +1892,24 @@ impl super::App {
                         _ => super::paint_fallback(ui.painter(), icon_rect, entry.is_dir),
                     }
                 }
-                RowKind::Command(_) => paint_chevron_right(ui.painter(), icon_rect, palette.weak),
+                RowKind::Command(_) | RowKind::App(_) => {
+                    paint_chevron_right(ui.painter(), icon_rect, palette.weak)
+                }
+                RowKind::Jump(path) => {
+                    let px = super::icon_px(ui.ctx(), 18.0);
+                    let key = super::icon_key(path, true, "", px, true);
+                    match self.images.get(&key, path, px, true) {
+                        Img::Ready(texture) => {
+                            ui.painter().image(
+                                texture.id(),
+                                icon_rect,
+                                Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
+                                Color32::WHITE,
+                            );
+                        }
+                        _ => super::paint_fallback(ui.painter(), icon_rect, true),
+                    }
+                }
                 RowKind::ShowAll => {
                     paint_search_icon(ui.painter(), icon_rect.shrink(2.0), palette.weak)
                 }
@@ -1399,7 +2010,13 @@ impl super::App {
             let Some(state) = self.palette.as_ref() else {
                 return;
             };
-            let hint = i18n::t("↑↓ taşı   ↵ aç   → komutlar   ← geri   Esc kapat");
+            let (prefix, _) = parse_prefix(&state.text);
+            let files_mode = matches!(state.mode, Mode::Files);
+            let hint = if files_mode {
+                i18n::t(prefix_footer(prefix))
+            } else {
+                i18n::t(prefix_footer(Prefix::Commands))
+            };
             let status = if let Some(scan) = &state.scan {
                 let scanned = scan.scanned.to_string();
                 let found = scan.found_total.to_string();
@@ -1409,11 +2026,14 @@ impl super::App {
                 } else {
                     format!("{} {}", i18n::t("Taranıyor…"), counts)
                 }
-            } else if matches!(state.mode, Mode::Files) {
+            } else if files_mode && prefix == Prefix::Files(SearchScope::Folder) {
                 format!(
-                    "; {}    ;; {}",
+                    "; {}    ;; {}    > {}    / {}    @ {}",
                     i18n::t("Alt klasörler"),
-                    i18n::t("Bu bilgisayar")
+                    i18n::t("Bu bilgisayar"),
+                    i18n::t("Komutlar"),
+                    i18n::t("Yol"),
+                    i18n::t("Son kullanılanlar"),
                 )
             } else {
                 String::new()
@@ -1465,6 +2085,69 @@ impl Row {
             reason: "",
         }
     }
+
+    /// A path row (path jump and recent folders): no entry metadata behind it.
+    fn jump(path: PathBuf, label: String, detail: String, spans: Vec<(usize, usize)>) -> Row {
+        Row {
+            kind: RowKind::Jump(path),
+            label,
+            spans,
+            detail,
+            meta: String::new(),
+            enabled: true,
+            reason: "",
+        }
+    }
+
+    /// An application command row.
+    fn app(
+        command: AppCmd,
+        label: String,
+        spans: Vec<(usize, usize)>,
+        reason: Option<&'static str>,
+    ) -> Row {
+        Row {
+            kind: RowKind::App(command),
+            label,
+            spans,
+            detail: String::new(),
+            meta: String::new(),
+            enabled: reason.is_none(),
+            reason: reason.unwrap_or(""),
+        }
+    }
+}
+
+/// Adds a path candidate unless it has already been seen.
+fn push_unique(
+    seen: &mut HashSet<PathBuf>,
+    out: &mut Vec<(PathBuf, String, String)>,
+    path: PathBuf,
+    label: String,
+    detail: String,
+) {
+    if seen.insert(path.clone()) {
+        out.push((path, label, detail));
+    }
+}
+
+/// Scores a path candidate against the filter. The label is matched first; when
+/// only the full path matches, the row is kept but stays unhighlighted.
+fn match_label(
+    label_lower: &str,
+    path_lower: &str,
+    terms: &[String],
+) -> Option<(i32, Vec<(usize, usize)>)> {
+    if terms.is_empty() {
+        return Some((0, Vec::new()));
+    }
+    if let Some((value, spans)) = score(label_lower, terms) {
+        return Some((value, spans));
+    }
+    if terms.iter().all(|term| path_lower.contains(term)) {
+        return Some((0, Vec::new()));
+    }
+    None
 }
 
 /// Second line: the path relative to the open folder. It is empty when the item
@@ -1709,16 +2392,65 @@ mod tests {
 
     #[test]
     fn prefix_cases() {
-        assert_eq!(parse_prefix("rapor"), (SearchScope::Folder, "rapor"));
-        assert_eq!(parse_prefix("; rapor"), (SearchScope::Subfolders, "rapor"));
-        assert_eq!(parse_prefix(";"), (SearchScope::Subfolders, ""));
-        assert_eq!(parse_prefix(";; rapor"), (SearchScope::ThisPc, "rapor"));
-        assert_eq!(parse_prefix(";;"), (SearchScope::ThisPc, ""));
+        use Prefix::Files;
+        assert_eq!(parse_prefix("rapor"), (Files(SearchScope::Folder), "rapor"));
+        assert_eq!(
+            parse_prefix("; rapor"),
+            (Files(SearchScope::Subfolders), "rapor")
+        );
+        assert_eq!(parse_prefix(";"), (Files(SearchScope::Subfolders), ""));
+        assert_eq!(
+            parse_prefix(";; rapor"),
+            (Files(SearchScope::ThisPc), "rapor")
+        );
+        assert_eq!(parse_prefix(";;"), (Files(SearchScope::ThisPc), ""));
         // A file name that starts with a semicolon is not a scope prefix.
         assert_eq!(
             parse_prefix(";important.txt"),
-            (SearchScope::Folder, ";important.txt")
+            (Files(SearchScope::Folder), ";important.txt")
         );
+    }
+
+    #[test]
+    fn symbol_prefixes_are_immediate() {
+        assert_eq!(parse_prefix("> yeni"), (Prefix::Commands, "yeni"));
+        assert_eq!(parse_prefix(">yeni"), (Prefix::Commands, "yeni"));
+        assert_eq!(parse_prefix("/c/"), (Prefix::Path, "c/"));
+        assert_eq!(parse_prefix("@"), (Prefix::Recents, ""));
+        assert_eq!(parse_prefix("@ projeler"), (Prefix::Recents, "projeler"));
+    }
+
+    #[test]
+    fn resolve_expands_home_and_environment() {
+        let current = Path::new("C:/work");
+        // Relative paths hang off the open folder.
+        assert_eq!(resolve_path("sub", current), PathBuf::from("C:/work/sub"));
+        // An absolute path is taken as-is.
+        assert_eq!(
+            resolve_path("C:/Windows", current),
+            PathBuf::from("C:/Windows")
+        );
+        // Unknown variables and lone percents stay literal.
+        assert_eq!(expand_env("100%"), "100%");
+        assert_eq!(expand_env("%NO_SUCH_VAR_XYZ%"), "%NO_SUCH_VAR_XYZ%");
+        if let Some(home) = dirs::home_dir() {
+            assert_eq!(resolve_path("~", current), home);
+            assert_eq!(resolve_path("~/docs", current), home.join("docs"));
+        }
+    }
+
+    #[test]
+    fn app_commands_have_no_duplicates() {
+        let commands = app_commands(4);
+        for (index, command) in commands.iter().enumerate() {
+            assert!(
+                !commands[..index].contains(command),
+                "{command:?} listed twice"
+            );
+        }
+        assert!(commands.contains(&AppCmd::Peek));
+        assert!(commands.contains(&AppCmd::Paste));
+        assert!(commands.contains(&AppCmd::Known(3)));
     }
 
     #[test]
