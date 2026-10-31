@@ -921,11 +921,15 @@ fn translucent(c: Color32, a: u8) -> Color32 {
 }
 
 /// Cam modunda tuval/şerit yüzeylerini yarı saydam, aksi halde opak döndürür.
+///
+/// Alfa değerleri buzlu camın ne kadar görüneceğini belirler: tuval (kartların
+/// arasındaki oluklar) neredeyse tamamen saydamdır, sekme şeridi ise yazıyı
+/// okunur tutmak için daha doludur. İkisi de akrilik katmanın üzerine biner.
 fn pal(dark: bool) -> Pal {
     let mut p = pal_solid(dark);
     if glass() {
-        p.strip = translucent(p.strip, 210);
-        p.canvas = translucent(p.canvas, 198);
+        p.strip = translucent(p.strip, 150);
+        p.canvas = translucent(p.canvas, 32);
     }
     p
 }
@@ -1131,7 +1135,7 @@ fn apply_theme(ctx: &egui::Context, accent: Color32, theme: u8) {
         _ => ctx.style().visuals.dark_mode,
     };
     let line = pal(dark_frame).line;
-    crate::system::apply_backdrop(dark_frame, (line.r(), line.g(), line.b()), glass());
+    crate::system::apply_backdrop(dark_frame, (line.r(), line.g(), line.b()));
 }
 
 /// Ölçek: yerleşim (pencere, kenar boşlukları, simgeler) yalnızca monitör DPI'sına uyar;
@@ -8159,7 +8163,7 @@ fn resize_edges(ctx: &egui::Context) {
 }
 
 impl eframe::App for App {
-    /// Mica camı istemci alanının altından görünsün diye arka planı saydam temizle.
+    /// Akrilik buzlu cam istemci alanının altından görünsün diye arka planı saydam temizle.
     /// Cam kapalıysa tuval rengi (opak) kullanılır.
     fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
         if glass() {
@@ -8184,22 +8188,27 @@ impl eframe::App for App {
                     let hwnd = w.hwnd.get();
                     self.hwnd = Some(hwnd);
                     crate::system::set_hwnd(hwnd);
-                    // Pencere yüzeyi gerçek alfa kanalı taşıyorsa Mica camı görünür;
-                    // taşımıyorsa tuval opak kalır (bkz. `GLASS`).
+                    let dark = ctx.style().visuals.dark_mode;
+                    let line = pal_solid(dark).line;
+                    crate::system::apply_backdrop(dark, (line.r(), line.g(), line.b()));
+                    // Buzlu cam, hem pencerenin gerçek alfa kanalına hem de akrilik
+                    // katmanın kurulabilmesine bağlı; ikisi de yoksa tuval opak kalır.
                     let alpha = crate::system::window_alpha_bits(hwnd);
-                    let was = GLASS.swap(alpha > 0, Relaxed);
-                    if was != glass() {
+                    let glass_now = alpha > 0 && crate::system::backdrop_ok();
+                    if GLASS.swap(glass_now, Relaxed) != glass_now {
                         ctx.request_repaint();
                     }
-                    let dark = ctx.style().visuals.dark_mode;
-                    let line = pal(dark).line;
-                    crate::system::apply_backdrop(dark, (line.r(), line.g(), line.b()), glass());
                     shell::install_subclass(hwnd);
                     // eframe pencereyi ilk kareden sonra gösterir; o an DWM henüz
                     // GL yüzeyini almadığından bir kare beyaz parlar. Hazır olana dek gizle.
                     shell::set_cloak(hwnd, true);
                 }
             }
+        }
+        // winit stilleri yeniden uygulayıp `WS_CAPTION`'ı geri getirebilir; DWM'nin
+        // ikinci düğme takımını çizmemesi için her karede temizlenir.
+        if let Some(hwnd) = self.hwnd {
+            crate::system::ensure_no_caption(hwnd);
         }
 
         // Vurgu rengi, animasyon veya ölçek (DPI / metin boyutu) değiştiyse beklemeden uygula

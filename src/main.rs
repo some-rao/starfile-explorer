@@ -79,8 +79,9 @@ fn main() -> eframe::Result<()> {
             .with_app_id(APP_ID)
             // Başlık çubuğu yok: sekmeler ve pencere düğmeleri Explorer gibi en üstte
             .with_decorations(false)
-            // Mica camı istemci alanının arkasına çizilebilsin diye saydam yüzey iste.
-            // Sürücü/GL yapılandırması desteklemezse pencere opak kalır (zararsız).
+            // Akrilik buzlu cam istemci alanının arkasına çizilebilsin diye saydam
+            // yüzey iste. Sürücü/GL yapılandırması desteklemezse pencere opak kalır
+            // (zararsız).
             .with_transparent(true)
             .with_inner_size([1060.0, 640.0])
             .with_min_inner_size([640.0, 400.0])

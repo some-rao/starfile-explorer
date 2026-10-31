@@ -10,6 +10,8 @@ use std::sync::OnceLock;
 static DIRTY: AtomicBool = AtomicBool::new(false);
 static CTX: OnceLock<egui::Context> = OnceLock::new();
 static HWND: AtomicIsize = AtomicIsize::new(0);
+/// Akrilik (buzlu cam) katmanı başarıyla kuruldu mu; `App` tuvali buna göre çizer.
+static ACRYLIC: AtomicBool = AtomicBool::new(false);
 
 /// Ana pencere tutamacını kaydet; DWM çağrıları pencere oluştuktan sonra yapılabilir.
 pub fn set_hwnd(hwnd: isize) {
@@ -24,6 +26,11 @@ pub fn mark_dirty() {
 /// Değişiklik bayrağını okur ve temizler.
 pub fn take_dirty() -> bool {
     DIRTY.swap(false, Ordering::Relaxed)
+}
+
+/// Akrilik buzlu cam katmanı etkin mi (bkz. `apply_backdrop`).
+pub fn backdrop_ok() -> bool {
+    ACRYLIC.load(Ordering::Relaxed)
 }
 
 /// Alt sınıf işlemcisinin repaint isteyebilmesi için egui bağlamı.
@@ -45,9 +52,9 @@ mod imp {
 
     use windows::Win32::Foundation::{BOOL, HWND};
     use windows::Win32::Graphics::Dwm::{
-        DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMSBT_MAINWINDOW, DWMWA_BORDER_COLOR,
-        DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
-        DWMWCP_ROUND,
+        DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMSBT_TRANSIENTWINDOW,
+        DWMWA_BORDER_COLOR, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE,
+        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
     };
     use windows::Win32::UI::Controls::MARGINS;
     use windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
@@ -199,29 +206,70 @@ mod imp {
         }
     }
 
-    /// Yuvarlatılmış köşeler, Mica (buzlu cam) arka planı ve temaya uygun kenarlık.
+    /// Başlık çubuğu stillerini kaldırır.
+    ///
+    /// `DwmExtendFrameIntoClientArea` pencerenin tamamını çerçeveye çevirdiğinde,
+    /// `WS_CAPTION`/`WS_SYSMENU` hâlâ duruyorsa DWM temanın kendi küçült/büyüt/kapat
+    /// düğmelerini de çizer ve uygulamanın kendi düğmelerinin yanında ikinci bir takım
+    /// belirir. Stilleri kaldırınca çerçeve yine saydam kalır (cam/saydamlık için
+    /// yeterli) ama sistem düğmeleri çizilmez.
+    unsafe fn strip_caption(hwnd: isize) {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, SWP_FRAMECHANGED,
+            SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_CAPTION, WS_SYSMENU,
+        };
+        let hwnd = hwnd as *mut c_void;
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE) as u32;
+        let stripped = style & !(WS_CAPTION | WS_SYSMENU);
+        if stripped == style {
+            return;
+        }
+        SetWindowLongPtrW(hwnd, GWL_STYLE, stripped as isize);
+        SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
+
+    /// winit pencere bayrakları değiştiğinde stilleri yeniden yazar ve `WS_CAPTION`'ı
+    /// geri getirir (bkz. winit `window_state.rs`); DWM de o zaman ikinci bir sistem
+    /// düğmesi takımı çizer. Her karede ucuzca geri alınır: stil zaten temizse
+    /// fonksiyon hiçbir şey yapmadan döner.
+    pub fn ensure_no_caption(hwnd: isize) {
+        unsafe { strip_caption(hwnd) }
+    }
+
+    /// Yuvarlatılmış köşeler, temaya uygun kenarlık ve akrilik (buzlu cam) arka plan.
     ///
     /// - `DWMWA_USE_IMMERSIVE_DARK_MODE`: özel başlık çubuğu kullanan pencerelerde ince
     ///   çerçeveyi/gölgeyi koyu moda uyarlar.
     /// - `DWMWA_WINDOW_CORNER_PREFERENCE`: Windows 11'in yuvarlatılmış köşeleri.
     /// - `DWMWA_BORDER_COLOR`: varsayılan gri kenar çizgisi yerine temanın ayraç rengi.
-    /// - `DWMWA_SYSTEMBACKDROP_TYPE = Mica` + istemci alanının çerçeveye çevrilmesi:
-    ///   pencere arkasında masaüstü tonlu, bulanık bir yüzey. Yalnızca `glass` açıkken
-    ///   uygulanır (bkz. `window_alpha_bits`); tuval/şerit yarı saydam çizilerek görünür.
+    /// - `DWMWA_SYSTEMBACKDROP_TYPE = TRANSIENTWINDOW`: akrilik. Mica'nın düz tonunun
+    ///   aksine gürültülü/dokulu bir buzlanma verir. Görünmesi için `clear_color`
+    ///   saydam ve `Pal::canvas`/`strip` yarı saydam çizilir.
+    /// - `DwmExtendFrameIntoClientArea(-1)`: istemci alanını çerçeveye çevirir; DWM'nin
+    ///   pencerenin alfa kanalını onurlandırması (yani camın görünmesi) buna bağlıdır.
+    ///   Bu yüzden `strip_caption` ile sistem düğmeleri kapatılır.
     ///
     /// Windows 10'da desteklenmeyen çağrılar sessizce başarısız olur, zararsız.
-    pub fn apply_backdrop(dark: bool, border: (u8, u8, u8), glass: bool) {
-        let hwnd = super::HWND.load(Ordering::Relaxed);
-        if hwnd == 0 {
+    pub fn apply_backdrop(dark: bool, border: (u8, u8, u8)) {
+        let raw = super::HWND.load(Ordering::Relaxed);
+        if raw == 0 {
             return;
         }
-        let hwnd = HWND(hwnd as *mut c_void);
+        let hwnd = HWND(raw as *mut c_void);
         unsafe {
-            let dark = BOOL::from(dark);
+            let dark_flag = BOOL::from(dark);
             let _ = DwmSetWindowAttribute(
                 hwnd,
                 DWMWA_USE_IMMERSIVE_DARK_MODE,
-                &dark as *const BOOL as *const c_void,
+                &dark_flag as *const BOOL as *const c_void,
                 std::mem::size_of::<BOOL>() as u32,
             );
             let corner = DWMWCP_ROUND;
@@ -239,24 +287,24 @@ mod imp {
                 &color as *const _ as *const c_void,
                 std::mem::size_of::<u32>() as u32,
             );
-            if !glass {
-                return;
-            }
-            let backdrop = DWMSBT_MAINWINDOW;
-            let _ = DwmSetWindowAttribute(
+            // Sistem düğmeleri ikinci kez çizilmesin diye önce başlık stillerini kaldır.
+            strip_caption(raw);
+            let backdrop = DWMSBT_TRANSIENTWINDOW;
+            let ok = DwmSetWindowAttribute(
                 hwnd,
                 DWMWA_SYSTEMBACKDROP_TYPE,
                 &backdrop as *const _ as *const c_void,
                 std::mem::size_of_val(&backdrop) as u32,
-            );
-            // İstemci alanının tamamını çerçeveye çevir; Mica kartların arkasında kalsın.
+            )
+            .is_ok();
             let margins = MARGINS {
                 cxLeftWidth: -1,
                 cxRightWidth: -1,
                 cyTopHeight: -1,
                 cyBottomHeight: -1,
             };
-            let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
+            let extended = DwmExtendFrameIntoClientArea(hwnd, &margins).is_ok();
+            super::ACRYLIC.store(ok && extended, Ordering::Relaxed);
         }
     }
 }
@@ -286,12 +334,20 @@ mod imp {
         3
     }
 
-    /// Linux'ta Mica yok; pencere yüzeyi saydam sayılmaz.
+    /// Linux'ta Mica/akrilik yok; pencere yüzeyi saydam sayılmaz.
     pub fn window_alpha_bits(_hwnd: isize) -> u8 {
         0
     }
 
-    pub fn apply_backdrop(_dark: bool, _border: (u8, u8, u8), _glass: bool) {}
+    /// Linux'ta sistem başlık çubuğu yok.
+    pub fn ensure_no_caption(_hwnd: isize) {}
+
+    /// Linux'ta akrilik katman yok.
+    pub fn backdrop_ok() -> bool {
+        false
+    }
+
+    pub fn apply_backdrop(_dark: bool, _border: (u8, u8, u8)) {}
 }
 
 pub use imp::*;

@@ -344,8 +344,8 @@ unsafe extern "system" fn subclass_proc(
         crate::system::repaint();
     }
     if msg == WM_NCHITTEST {
-        // DWM çerçevesi istemci alanının tamamına yayıldığından (Mica) varsayılan
-        // yanıt HTCAPTION olur; egui tıklamaları alabilsin diye HTCLIENT'e zorlanır.
+        // İstemci alanı çerçeveye yayıldığı için varsayılan yanıt HTCAPTION olur;
+        // egui'nin tıklamaları alabilmesi için kenarlar dışında HTCLIENT'e zorlanır.
         // Pencere taşıma `ViewportCommand::StartDrag` ile yapıldığından etkilenmez.
         if let Some(edge) = resize_edge(hwnd, lp) {
             return LRESULT(edge as isize);
