@@ -52,8 +52,9 @@ mod imp {
 
     use windows::Win32::Foundation::{BOOL, HWND};
     use windows::Win32::Graphics::Dwm::{
-        DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMSBT_TRANSIENTWINDOW,
-        DWMWA_BORDER_COLOR, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE,
+        DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMNCRP_DISABLED,
+        DWMSBT_TRANSIENTWINDOW, DWMWA_BORDER_COLOR, DWMWA_NCRENDERING_POLICY,
+        DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE,
         DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
     };
     use windows::Win32::UI::Controls::MARGINS;
@@ -286,6 +287,16 @@ mod imp {
                 DWMWA_BORDER_COLOR,
                 &color as *const _ as *const c_void,
                 std::mem::size_of::<u32>() as u32,
+            );
+            // DWM'nin kendi istemci-dışı alanını (başlık çubuğu) çizmesini kapat.
+            // Bu, sistem vurgu rengiyle (mavi şerit) çizilen üst bantı kaldırır;
+            // akrilik bu alana da yayılır. Yuvarlatılmış köşeler ve gölge korunur.
+            let nc = DWMNCRP_DISABLED;
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_NCRENDERING_POLICY,
+                &nc as *const _ as *const c_void,
+                std::mem::size_of_val(&nc) as u32,
             );
             // Sistem düğmeleri ikinci kez çizilmesin diye önce başlık stillerini kaldır.
             strip_caption(raw);
