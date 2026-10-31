@@ -7531,10 +7531,10 @@ impl App {
         // Git rozeti: depo bilgisi arka planda tazelenir (5 sn TTL)
         let git = self.git_snapshot(ui.ctx());
         ui.horizontal(|ui| {
-            ui.set_min_height(23.0);
+            ui.set_min_height(18.0);
             ui.spacing_mut().item_spacing.x = 8.0;
             let bar = |ui: &mut egui::Ui| {
-                let (r, _) = ui.allocate_exact_size(egui::vec2(1.0, 14.0), Sense::hover());
+                let (r, _) = ui.allocate_exact_size(egui::vec2(1.0, 12.0), Sense::hover());
                 ui.painter()
                     .vline(r.center().x, r.y_range(), Stroke::new(1.0_f32, p.text));
             };
@@ -7612,7 +7612,7 @@ impl App {
                 ui.add_space(4.0);
                 let grid = self.view_level > 0;
                 let toggle = |ui: &mut egui::Ui, glyph: &str, on: bool| {
-                    let (rect, r) = ui.allocate_exact_size(egui::vec2(26.0, 20.0), Sense::click());
+                    let (rect, r) = ui.allocate_exact_size(egui::vec2(26.0, 16.0), Sense::click());
                     if on {
                         ui.painter().rect(
                             rect,
@@ -7628,7 +7628,7 @@ impl App {
                         rect.center(),
                         Align2::CENTER_CENTER,
                         glyph,
-                        fluent_font(14.0),
+                        fluent_font(12.0),
                         p.text,
                     );
                     r
@@ -8434,7 +8434,7 @@ impl eframe::App for App {
                 self.toolbar(ui, &mut actions);
             });
         egui::TopBottomPanel::bottom("status")
-            .exact_height((23.0 * text_factor()).round())
+            .exact_height((18.0 * text_factor()).round())
             .frame(
                 egui::Frame::new()
                     .fill(pl.canvas)
