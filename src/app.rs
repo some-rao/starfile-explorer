@@ -31,6 +31,9 @@ mod palette;
 pub(crate) const R_CARD: f32 = 10.0;
 /// İç denetimler: düğmeler, alanlar, seçili satırlar
 pub(crate) const R_CTRL: f32 = 6.0;
+/// Sekme şeridinin üstünde bırakılan cam boşluk: sekmeler bu boşluğun altında
+/// yüzen "hap" kartlar gibi durur.
+const TAB_GAP: f32 = 6.0;
 
 /// Görünüm seviyeleri: 0 = Ayrıntılar, diğerleri simge boyutu (mantıksal piksel)
 const VIEW_LEVELS: [(u32, &str); 5] = [
@@ -881,8 +884,6 @@ fn font_file(pattern: &str) -> Option<Vec<u8>> {
 struct Pal {
     /// Sekme şeridi (başlık çubuğu)
     strip: Color32,
-    /// Etkin sekme + gezinme satırı
-    nav: Color32,
     /// Adres ve arama kutusu
     field: Color32,
     field_stroke: Stroke,
@@ -935,7 +936,6 @@ fn pal_solid(dark: bool) -> Pal {
         let sel = if dark { 0.28 } else { 0.22 };
         return Pal {
             strip: c.crust,
-            nav: c.mantle,
             field: c.surface,
             field_stroke: if dark {
                 Stroke::NONE
@@ -969,7 +969,6 @@ fn pal_solid(dark: bool) -> Pal {
     if dark {
         Pal {
             strip: Color32::from_rgb(10, 10, 10),
-            nav: Color32::from_rgb(31, 31, 31),
             field: Color32::from_rgb(44, 44, 44),
             field_stroke: Stroke::NONE,
             line: Color32::from_rgb(58, 58, 58),
@@ -988,7 +987,6 @@ fn pal_solid(dark: bool) -> Pal {
     } else {
         Pal {
             strip: Color32::from_rgb(232, 232, 232),
-            nav: Color32::from_rgb(249, 249, 249),
             field: Color32::from_rgb(255, 255, 255),
             field_stroke: Stroke::new(1.0_f32, Color32::from_rgb(229, 229, 229)),
             line: Color32::from_rgb(229, 229, 229),
@@ -3525,9 +3523,10 @@ impl App {
         let p = pal_of(ui);
         // Başlık çubuğu: boş yerden sürükleyince pencere taşınır, çift tıklayınca büyür/küçülür.
         // Önce kaydedilir ki üstüne gelen sekmeler ve düğmeler tıklamayı alsın.
-        let bar = Rect::from_min_size(
-            ui.max_rect().min,
-            egui::vec2(ui.available_width(), title_h()),
+        // Sürükleme alanı sekmelerin üstündeki cam boşluğu da kapsar.
+        let bar = Rect::from_min_max(
+            egui::pos2(ui.max_rect().left(), ui.max_rect().top() - TAB_GAP),
+            ui.max_rect().max,
         );
         let maximized = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
         let drag = ui.interact(bar, egui::Id::new("title_drag"), Sense::click_and_drag());
@@ -3542,6 +3541,14 @@ impl App {
         // Explorer'da sekme en fazla ~236 px; sığmazsa daralır
         let tab_w = ((bar.width() - 46.0 * 3.0 - 60.0) / n as f32).clamp(60.0, 236.0);
         let tab_h = title_h() - 2.0;
+        // Vurgu rengi açıksa koyu, koyuysa beyaz yazı: etkin sekmede okunabilirlik
+        let a = accent.to_array();
+        let lum = 0.299 * a[0] as f32 + 0.587 * a[1] as f32 + 0.114 * a[2] as f32;
+        let on_accent = if lum > 150.0 {
+            Color32::BLACK
+        } else {
+            Color32::WHITE
+        };
         ui.with_layout(Layout::left_to_right(Align::Max), |ui| {
             ui.set_min_height(title_h());
             ui.spacing_mut().item_spacing.x = 0.0;
@@ -3565,22 +3572,10 @@ impl App {
                     se: 0,
                 };
                 if active {
-                    painter.rect_filled(rect, radius, p.nav);
+                    // Etkin sekme: vurgu dolgusu; üst köşeleri yuvarlak, alta yaslı
+                    painter.rect_filled(rect, radius, accent);
                 } else if resp.hovered() {
-                    painter.rect_filled(
-                        rect.shrink2(egui::vec2(2.0, 0.0))
-                            .with_max_y(rect.bottom() - 4.0),
-                        6.0,
-                        p.hover,
-                    );
-                } else if i + 1 < n && i + 1 != self.active {
-                    // Etkin olmayan sekmeler arasında ince ayraç
-                    let x = rect.right() - 0.5;
-                    painter.vline(
-                        x,
-                        rect.center().y - 8.0..=rect.center().y + 6.0,
-                        Stroke::new(1.0_f32, p.line),
-                    );
+                    painter.rect_filled(rect, radius, p.hover);
                 }
                 let icon = Rect::from_center_size(
                     egui::pos2(rect.left() + 20.0, rect.center().y),
@@ -3606,27 +3601,32 @@ impl App {
                     .interact(close_rect, egui::Id::new(("tab_close", i)), Sense::click())
                     .on_hover_text(crate::i18n::t("Sekmeyi kapat (Ctrl+W)"));
                 if close.hovered() {
-                    painter.rect_filled(close_rect, 4.0, p.nav_sel);
+                    let bg = if active {
+                        Color32::from_white_alpha(48)
+                    } else {
+                        p.nav_sel
+                    };
+                    painter.rect_filled(close_rect, 4.0, bg);
                 }
+                let fg = if active { on_accent } else { p.text };
                 painter.text(
                     close_rect.center(),
                     Align2::CENTER_CENTER,
                     g::CLOSE,
                     fluent_font(10.0),
-                    p.text,
+                    fg,
                 );
                 if close.clicked() {
                     actions.push(Action::CloseTab(i));
                 }
                 let text_w = (close_rect.left() - 4.0) - (icon.right() + 10.0);
-                let mut job =
-                    egui::text::LayoutJob::simple_singleline(title, ui_font(14.0), p.text);
+                let mut job = egui::text::LayoutJob::simple_singleline(title, ui_font(14.0), fg);
                 job.wrap = egui::text::TextWrapping::truncate_at_width(text_w.max(10.0));
                 let galley = painter.layout_job(job);
                 painter.galley(
                     egui::pos2(icon.right() + 10.0, rect.center().y - galley.size().y / 2.0),
                     galley,
-                    p.text,
+                    fg,
                 );
 
                 if resp.clicked() {
@@ -8400,15 +8400,16 @@ impl eframe::App for App {
 
         // Düzen: sekme şeridi, araç çubuğu kartı, solda gezinti bölmesi, altta durum çubuğu
         let pl = pal(ctx.style().visuals.dark_mode);
+        // Sekme şeridi: üstte TAB_GAP kadar cam boşluk, sekmeler alta yaslı yüzer.
         egui::TopBottomPanel::top("tabs")
-            .exact_height(title_h())
+            .exact_height(title_h() + TAB_GAP)
             .frame(
                 egui::Frame::new()
                     .fill(pl.strip)
                     .inner_margin(egui::Margin {
                         left: 8,
                         right: 0,
-                        top: 0,
+                        top: TAB_GAP as i8,
                         bottom: 0,
                     }),
             )
