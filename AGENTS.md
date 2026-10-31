@@ -52,8 +52,8 @@ cargo clippy --all-targets
    English pair to `TABLE` in `i18n.rs` plus **every** file in `src/i18n/`; `cargo test` asserts exact key
    equality (`i18n.rs:495-503`). Positional indices are persisted (`lang = index+1`, `theme = index+3`), so
    **append only** to `i18n::LANGS` and `scheme::SCHEMES`.
-4. **`Tab` owns per-tab state, `App` owns global state.** Sort, ascending, hidden, view level, grouping set
-   and preview are global (`app.rs:297-376`); filter, selection, cursor, history, loader and search are
+4. **`Tab` owns per-tab state, `App` owns global state.** Sort, ascending, hidden, view level and grouping set
+   are global (`app.rs:297-376`); filter, selection, cursor, history, loader and search are
    per-tab (`tab.rs:37-74`). Selection/cursor/anchor are indices into `Tab.entries`, **not** into `view`.
 5. **All I/O happens off the UI thread.** One thread per directory load / search / job; results arrive on
    `mpsc` channels polled each frame (`App::update`). New async work must call `ctx.request_repaint()` or
@@ -90,9 +90,11 @@ main.rs ──► single-instance handoff (win::hand_off) ──► eframe::run_
                                      shell_unix.rs / win_unix.rs  (Linux twins)
 ```
 
-Sizes: `app.rs` 4526 lines · `fsutil.rs` 1134 · `properties.rs` 869 (Linux only) · `tab.rs` 553 ·
-`i18n.rs` 523 · `shell.rs` 490 · `win.rs` 472 · `win_unix.rs` 325 · `images.rs` 317 · `update.rs` 273 ·
-`shell_unix.rs` 170 · `desktop_apps.rs` 162 · `screenshot.rs` 122 · `scheme.rs` 85 · `main.rs` 70.
+Sizes: `app.rs` 8604 lines · `palette.rs` 2365 · `fsutil.rs` 1361 · `properties.rs` 1054 (Linux only) ·
+`shell.rs` 978 · `highlight.rs` 833 · `menu.rs` 659 · `win.rs` 627 · `tab.rs` 625 · `i18n.rs` 611 ·
+`markdown.rs` 441 · `webview.rs` 420 · `query.rs` 402 · `images.rs` 393 · `win_unix.rs` 311 ·
+`update.rs` 282 · `shell_unix.rs` 275 · `git.rs` 214 · `scheme.rs` 211 · `desktop_apps.rs` 200 ·
+`system.rs` 200 · `screenshot.rs` 190 · `main.rs` 100.
 
 ---
 
@@ -100,11 +102,11 @@ Sizes: `app.rs` 4526 lines · `fsutil.rs` 1134 · `properties.rs` 869 (Linux onl
 
 | Task | Touch |
 |---|---|
-| New menu command / toolbar button | add `enum Action` variant (`app.rs:229`), push it from `command_bar`/`item_menu`/`background_menu`, handle in `apply` (`app.rs:1691`) |
+| New menu command / toolbar button | add `enum Action` variant (`app.rs:229`), push it from `toolbar_row`/`item_menu`/`background_menu`, handle in `apply` (`app.rs:1691`) |
 | New keyboard shortcut | `App::handle_keys` (`app.rs:1446`); use `shortcut()` (`app.rs:943`) so the event is consumed and modifiers match exactly |
 | New file operation | implement the job in `fsutil.rs` (`spawn_*` returning `Arc<Job>`), push via `App::push_job`, add undo mapping in `app.rs:4392-4399` |
 | New view mode | `VIEW_LEVELS` (`app.rs:21`), `file_area` dispatch (`app.rs:3410`), plus `Ctrl+Shift+1..6` map (`app.rs:1535`) and the View menu |
-| New window/panel | `App::update` panel stack (`app.rs:4440-4477`); remember Explorer panel order |
+| New window/panel | `App::update` panel stack (`app.rs:8369-8448`); remember Explorer panel order |
 | New theme | append to `scheme::SCHEMES` (`scheme.rs:48`) — never insert |
 | New language | copy `src/i18n/de.rs`, add `mod`, `LANGS`, `tables()`, Windows LANGID, run `cargo test` (`docs/dev/low-level-design.md#recipe-add-a-language`) |
 | New Windows shell feature | `shell.rs`/`win.rs` **and** a stub or fallback in `shell_unix.rs`/`win_unix.rs` |

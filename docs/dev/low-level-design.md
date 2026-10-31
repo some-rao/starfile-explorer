@@ -1,7 +1,7 @@
 # Low-level design reference — Swift Explorer
 
-Per-file reference for the code as of `v0.7.0` (`850c108`). Every claim is derivable from the cited lines.
-Use this to avoid re-reading `app.rs` (4.5k lines).
+Per-file reference for the code as of `v0.7.0` (`850c108`); sections touched by later work are marked
+"line numbers are indicative". Use this to avoid re-reading `app.rs`.
 
 Read first: [`architecture.md`](architecture.md) (layers/state), [`workflows.md`](workflows.md) (flows).
 
@@ -22,7 +22,7 @@ Read first: [`architecture.md`](architecture.md) (layers/state), [`workflows.md`
 | `Action` | 229-267 | 39 UI intents (deferred; see below) |
 | `Dialog` | 269-276 | `None`, `ConfirmDelete{paths}`, `Conflict{files,dest,cut,names}`, `Help`, Linux `Properties` |
 | `UndoOp` | 278-284 | `Rename{from,to}`, `Created`, `Moved(pairs)`, `Copied(dsts)`, `Trashed(srcs)` |
-| `Renaming` / `Preview` | 286-295 | inline edit state / preview worker slot |
+| `Renaming` / `Preview` | — | inline rename state; preview data slot owned by a live Quick Look |
 
 `Action` variants: `Navigate`, `OpenEntry(path,new_tab)`, `OpenSelected`, `Up`, `Back`, `Forward`,
 `Refresh`, `NewTab(path)`, `NewWindow`, `CloseTab(usize)`, `Copy`, `Cut`, `Paste`, `PasteInto(path)`,
@@ -41,12 +41,12 @@ Fields and values: see [`architecture.md` §9.1](architecture.md#91-config-json-
 
 | Group | Fields (line) | Notes |
 |---|---|---|
-| tabs/view | `tabs` 298, `active` 299, `sort` 300, `asc` 301, `show_hidden` 302, `show_preview` 303, `show_ext` 304, `view_level` 305, `grid_cols` 360 | view settings are **global**, not per tab |
+| tabs/view | `tabs`, `active`, `sort`, `asc`, `show_hidden`, `show_ext`, `view_level`, `grid_cols` | view settings are **global**, not per tab |
 | places | `bookmarks` 308, `recent` 309, `grouped` 311, `known` 331, `tree_open` 333 | `grouped` = folders grouped by date (default Downloads) |
 | lifecycle | `background` 312, `resident` 314, `autostart` 315, `start_hidden` 329, `revealed` 374, `frames` 373, `hwnd` 351 | resident = this process owns the pipe server |
 | updater | `auto_update` 320, `update_rx` 321, `update_wake` 323, `last_update_check` 324, `update_installed` 326 | atomics shared with the checker thread |
 | ops | `clipboard` 336, `jobs` 337, `dir_sizes` 338, `undo` 353, `silent_jobs` 367, `renaming` 352 | `silent_jobs` keyed by `Arc::as_ptr` |
-| input/UI | `dialog` 339, `address_edit` 340, `address_focus` 341, `focus_search` 342, `type_buf` 343, `type_time` 344, `toasts` 345, `marquee` 364, `item_rects` 365, `grid_scroll` 366, `zoom_acc` 363, `inject_release` 361 | |
+| input/UI | `dialog` 339, `address_edit` 340, `address_focus` 341, `type_buf` 343, `type_time` 344, `toasts` 345, `marquee` 364, `item_rects` 365, `grid_scroll` 366, `zoom_acc` 363, `inject_release` 361 | |
 | caches | `images` 349, `type_names` 350, `subdirs` 356-359, `drives` 334-335 | |
 | persistence | `saved_config` 368, `last_autosave` 369, `started` 372 | |
 
@@ -83,21 +83,22 @@ Actions / operations:
 | `expand_path` | 3085 | `~`, `shell:*`, `%VAR%`, slash normalization |
 | `type_name_cached` | 3129 | memoized `shell::type_name(ext)` |
 
-Rendering:
+Rendering (line numbers are indicative; the file grows faster than this table):
 
 | Function | Line | Notes |
 |---|---|---|
 | `tab_bar` | 2035 | 34 px strip; drag region added *first*; tabs max 236 px; caption buttons 46×30 |
-| `nav_bar` | 2152 | back/forward/up/refresh (40×32) + search box (25 % width, 180–480 px) |
+| `toolbar` / `toolbar_row` | — | one card: back/forward/refresh, New/View/Sort/Split/More, path bar, palette launcher |
 | `crumbs` / `crumb_children` | ~2241 / ~2269 | longest known-folder ancestor; overflow into `«` |
 | `address_bar` | 2281 | edit mode with autocomplete from `subdirs_cached` (never hits disk inline) |
-| `command_bar` | 2486 | New/Cut/Copy/Paste/Rename/Delete, Sort, View, More |
 | `nav_row` / `tree_node` / `sidebar` | 2745 / 2777 / 2824 | 24 px rows, 16 px indent, max 2000 children |
+| `card_surface` / `sidebar_card` / `content_card` | — | rounded canvas/card surfaces, radius `R_CARD` |
 | `home_page` / `pc_page` | 2933 / 3014 | tiles 250×62 / drive cards 262×54 |
+| `pane_body` / `split_area` | — | single pane vs the two-pane split |
 | `file_area` | 3362 | background clicks, marquee, drop, empty states |
 | `details_view` | 3446 | `TableBuilder`, fixed columns by width, group headers 34 px |
 | `grid_view` | 3647 | manual virtualization, tile = `max(size+22,80)` × `size+76`, ≤3 name lines |
-| `preview_panel` | 3838 | 0/1/N selection branches |
+| `quick_look_ui` / `preview_body` | — | Space overlay; the only preview surface |
 | `status_bar` | 3944 | counts, selection size, search progress, view toggles |
 | `overlays` | 4007 | job cards + toasts, bottom-right |
 | `drag_overlay` | 4064 | drag label + external drop hint |
@@ -111,14 +112,18 @@ Rendering:
 | Panel | Height/width | Frame |
 |---|---|---|
 | `TopBottomPanel::top("tabs")` | exactly 34 | fill `Pal.strip`, margin left 8 |
-| `top("nav")` | auto | fill `Pal.nav`, margins 8/12/8/8 |
-| `top("cmd")` | auto | fill `Pal.content`, margins 12/12/7/7 |
-| `bottom("status")` | exactly 23 | fill `Pal.status`, margins 14/8 |
-| `SidePanel::left("nav_pane")` | default 158, 120–450, resizable | `Pal.content` |
-| `SidePanel::right("preview")` | default 320, 220–900, resizable | `Pal.content`, margin 12 |
-| `CentralPanel` | remainder | margins 6/4/2/0 |
+| `top("toolbar")` | auto | fill `Pal.canvas`, margins 8/8/6/6; holds the toolbar card (`Pal.card`, radius `R_CARD`) |
+| `bottom("status")` | exactly 23 | fill `Pal.canvas`, margins 14/8 |
+| `SidePanel::left("nav_pane")` | default 158, 120–450, resizable | fill `Pal.canvas`, sidebar card inside |
+| `CentralPanel` | remainder | fill `Pal.canvas`, margins 8/8/2/8, content card inside |
 
-Panels use `show_separator_line(false)` and draw 1 px `hline`s on the background layer (`A:4443-4445`).
+Tonal structure: `Pal.canvas` is the darkest tone (lightest in the light theme) and every
+panel that is not a card paints it; cards (`Pal.card` + `R_CARD`) sit on top. There is no
+right-hand pane: the preview and details panes were removed and Quick Look (Space) is the
+only preview surface.
+
+Panels use `show_separator_line(false)`; the old 1 px `hline` separators are gone with the
+flat nav/command bars.
 
 ### 1.6 Rendering helpers
 
@@ -140,13 +145,13 @@ Panels use `show_separator_line(false)` and draw 1 px `hline`s on the background
 
 ### 1.7 Deferred action model
 
-Widgets never mutate FS state; they push `Action`s into the frame-local vector. `App::apply` (1691) runs
+Widgets never mutate FS state; they push `Action`s into the frame-local vector. `App::apply` runs
 **after** all panels (`A:4498-4500`). Consequences:
 
 - A newly opened dialog/tab/reload is visible next frame.
 - Reading `self.tabs[active]` inside a widget sees the state before the current frame's queued actions.
 - Some trivial mutations are inline and immediate: tab activation, sort direction, theme, language toggles,
-  `show_preview`, `show_hidden` (menu), address edit state.
+  `show_ext`, `show_hidden` (menu), address edit state.
 
 ### 1.8 Dialogs, overlays, toasts
 
@@ -169,14 +174,13 @@ Digits also match by `physical_key` (Turkish-Q layouts).
 | Ctrl+T / Ctrl+W | new tab / close active tab |
 | Ctrl+N | new window (new process) |
 | Ctrl+L, Alt+D, F4 | focus address bar (select all) |
-| Ctrl+F, Ctrl+E, F3 | focus search |
+| Ctrl+K, Ctrl+F, Ctrl+E, F3 | open the command palette (searches files, runs commands, jumps to a path) |
 | Ctrl+Tab / Ctrl+Shift+Tab | next / previous tab |
 | F5, Ctrl+R | refresh |
 | F1 | Help |
 | F11 | fullscreen toggle |
 | Alt+Left / mouse Extra1, Alt+Right / Extra2 | back / forward |
 | Alt+Up | up |
-| Alt+P, Ctrl+P | toggle Details pane |
 | Ctrl+H | toggle hidden items (does **not** clear subdir cache) |
 | Ctrl+Shift+1 / 2 / 3 / 4 / 6 | view: 256 px / 96 / 48 / 32 / Details (5 unbound) |
 | Ctrl+1..9 | activate tab n |
@@ -539,7 +543,7 @@ paths (verify before filing).
 | 13 | Date buckets are hardcoded Turkish, used as collapse keys; 8-13 day olds mis-bucket | `F:246`, `249-279` |
 | 14 | Native menu Enter on permanent-delete dialog confirms by keyboard | `A:4115` |
 | 15 | `restore_from_trash` matches by stem → can restore the wrong generation | `F:858-882` |
-| 16 | Preview slot is global; late thread can overwrite current selection | `A:3910-3940` |
+| 16 | Quick Look's preview slot is per overlay; a late read can land after the overlay is replaced | `A:495-507`, `5798` |
 | 17 | `display_name` byte-slices by `ext.len()`; non-ASCII case folding can mis-slice | `A:1023-1029` |
 | 18 | Reserved names (`CON`, `NUL`, trailing dot/space) pass `valid_name` | `A:1031-1035` |
 | 19 | `App` writes config from several call sites without locking; two instances can race | `A:1177-1209` |
@@ -557,7 +561,7 @@ paths (verify before filing).
 ### Recipe: add a command
 
 1. Add a variant to `Action` (`A:229-267`).
-2. Push it from `command_bar` (`A:2486`), `item_menu` (`A:3149`) and/or `background_menu` (`A:3233`).
+2. Push it from `toolbar_row`, `item_menu` (`A:3149`) and/or `background_menu` (`A:3233`).
 3. Handle it in `apply` (`A:1691`). Use `self.tabs[self.active]`, `selected_paths()`, and
    `push_job(..., undoable)` for long work.
 4. If it should be undoable, extend `UndoOp` + `do_undo` (`A:1392`) and the job-finish mapping
@@ -681,7 +685,7 @@ Line numbers in sections 1-11 are from 0.7.0; these modules were added after tha
   sorts modified-desc, caps 5000.
 - `Tab::rebuild_view` overrides sort to `Modified` desc and groups by `%B %Y` (English month names today).
 - `is_home()` stays true for Gallery (read-only guards); `is_gallery()` is the exception in
-  `navigate`, `load`, `go_up`, `preview_panel` and the central-panel dispatch.
+  `navigate`, `load`, `go_up` and the central-panel dispatch.
 - `images::decode_photo` is the local fallback for still images the shell cannot thumbnail (offline
   OneDrive placeholders, unusual PNGs); it is capped at 48 MB and only runs on non-icon requests.
 
@@ -689,8 +693,7 @@ Line numbers in sections 1-11 are from 0.7.0; these modules were added after tha
 
 - `Tab::is_home()` is true for Home, This PC **and Gallery**; check `is_gallery()` before any
   "virtual ⇒ no files" assumption.
-- `preview_panel` computes `home = !lists_files() && !is_gallery()`; dropping the second term brings back
-  "select an item" on Gallery.
+- `preview_body` is only reached from Quick Look, so it must not assume a selection-driven panel.
 - Gallery ignores the Sort menu by design; changing sort keys there has no effect.
 - `Action::Navigate(GALLERY)` forces `view_level = 3` (Large icons); other tabs keep their view.
 - `cargo fmt --all` is **not** run on this fork: it reflows the whole tree and makes upstream merges noisy.

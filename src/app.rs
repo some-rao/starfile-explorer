@@ -4461,9 +4461,9 @@ impl App {
         let painter = ui.painter().clone();
         let bg = rect.shrink2(egui::vec2(3.0, 0.0));
         if selected {
-            painter.rect_filled(bg, 4.0, p.nav_sel);
+            painter.rect_filled(bg, R_CTRL, p.nav_sel);
         } else if resp.hovered() {
-            painter.rect_filled(bg, 4.0, p.hover);
+            painter.rect_filled(bg, R_CTRL, p.hover);
         }
         let x0 = rect.left() + 16.0 * depth as f32;
         let mut toggled = false;
@@ -4866,7 +4866,7 @@ impl App {
                             let (rect, resp) =
                                 ui.allocate_exact_size(egui::vec2(250.0, 62.0), Sense::click());
                             if resp.hovered() {
-                                ui.painter().rect_filled(rect, 4.0, p.hover);
+                                ui.painter().rect_filled(rect, R_CTRL, p.hover);
                             }
                             let icon = Rect::from_min_size(
                                 rect.left_top() + egui::vec2(8.0, 7.0),
@@ -5019,9 +5019,9 @@ impl App {
                                 ui.allocate_exact_size(egui::vec2(262.0, 54.0), Sense::click());
                             let sel = self.tabs[self.active].cursor_path.as_ref() == Some(&d.root);
                             if sel {
-                                ui.painter().rect_filled(rect, 4.0, p.sel);
+                                ui.painter().rect_filled(rect, R_CTRL, p.sel);
                             } else if resp.hovered() {
-                                ui.painter().rect_filled(rect, 4.0, p.hover);
+                                ui.painter().rect_filled(rect, R_CTRL, p.hover);
                             }
                             let icon = Rect::from_min_size(
                                 rect.left_top() + egui::vec2(4.0, 3.0),
@@ -6908,16 +6908,16 @@ impl App {
                         if selected {
                             painter.rect_filled(
                                 rect,
-                                4.0,
+                                R_CTRL,
                                 if resp.hovered() { pl.sel_hover } else { pl.sel },
                             );
                         } else if resp.hovered() {
-                            painter.rect_filled(rect, 4.0, pl.hover);
+                            painter.rect_filled(rect, R_CTRL, pl.hover);
                         }
                         if t.cursor == Some(idx) && !selected && t.selection.is_empty() {
                             painter.rect_stroke(
                                 rect,
-                                4.0,
+                                R_CTRL,
                                 Stroke::new(1.0_f32, pl.line),
                                 egui::StrokeKind::Inside,
                             );
@@ -7605,13 +7605,13 @@ impl App {
                     if on {
                         ui.painter().rect(
                             rect,
-                            3.0,
+                            R_CTRL,
                             p.nav_sel,
                             Stroke::new(1.0_f32, p.line),
                             egui::StrokeKind::Inside,
                         );
                     } else if r.hovered() {
-                        ui.painter().rect_filled(rect, 3.0, p.hover);
+                        ui.painter().rect_filled(rect, R_CTRL, p.hover);
                     }
                     ui.painter().text(
                         rect.center(),

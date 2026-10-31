@@ -152,19 +152,19 @@ filtered at view level.
 
 ```mermaid
 flowchart TD
-  Q[search box text] -->|typing| F1[Tab.filter + view_dirty]
+  Q[palette query] -->|typing| F1[Tab.filter + view_dirty<br/>while a search is running]
   F1 --> F2[Pattern::matches in rebuild_view<br/>instant in-memory filter]
-  Q -->|Enter| F3{expand_path yields existing dir?}
-  F3 -- yes --> N[Navigate]
-  F3 -- no --> S{Tab.search already?}
-  S -- no --> S1[Action::StartSearch]
-  S1 --> S2[Tab::start_search: Pattern from filter, clear filter]
-  S2 --> S3[fsutil::spawn_search: roots = folder or all drives]
+  Q -->|pick "show all results"| S1[Action::SetSearchScope + StartSearch]
+  S1 --> S2[Tab::start_search: Pattern from filter]
+  S2 --> S3[fsutil::spawn_search: roots = folder, subfolders or all drives]
   S3 --> S4[thread + nested rayon walk, batch per directory]
   S4 --> S5[Tab::poll: entries.extend, view_dirty]
-  S -- yes --> S6[Enter does not replace query]
 ```
 
+- The toolbar has no search box. Ctrl+K (also Ctrl+E, Ctrl+F, F3) opens the command palette, which
+  filters the current folder in memory as you type; the `;` / `;;` prefixes pick a wider scope.
+- Picking **show all results** hands the query to the in-tab search page with the scope taken from
+  that prefix (`palette.rs` → `Action::SetSearchScope` + `Action::StartSearch`).
 - Pattern semantics (`F:170-219`): if the query contains `*` or `?`, the whole query is one glob over the
   lowercased name (spaces literal). Otherwise whitespace-separated words are AND-ed substrings.
 - Search roots: current folder, or every drive root on This PC (`A:1918-1922`).
@@ -173,10 +173,8 @@ flowchart TD
 - Cancellation: `SearchHandle.cancel` + dropping the receiver (`T:320-324`); each directory checks the flag.
 - Results are appended unsorted; the UI sorts them each rebuild. Date grouping is suppressed while searching
   (`T:481`). Details view adds a "folder" column with the path relative to the tab root (`A:3590-3599`).
-- Exit: Esc, "close search" button, Up/Backspace; `exit_search` either clears (virtual) or reloads the
+- Exit: Esc, the search chip, Up/Backspace; `exit_search` either clears (virtual) or reloads the
   folder (`T:326-339`).
-- Home page: Enter in the search box tries path navigation and therefore never starts a recursive search
-  (`A:2221-2231`) — a known rough edge.
 
 ---
 
@@ -395,16 +393,21 @@ flowchart LR
 
 ---
 
-## 15. Preview pane (Details pane)
+## 15. Quick Look (preview surface)
 
-- Toggle: Alt+P / Ctrl+P / View menu / status-bar button (`A:1525-1527`, `2584-2665`).
-- 0 selection → current folder icon + item count; 1 item → 200 px icon/thumbnail, Open button for files,
-  type/size/modified/created/location, directory size if computed, text preview; multi-selection → count and
-  summed sizes (`A:3838-3942`).
-- Text preview: background thread reads 64 KiB; UTF-16LE BOM decoded, NUL byte in first 8 KiB → binary,
-  else UTF-8 lossy (`F:967-987`). Only text/error are rendered.
-- The preview slot is global, not per tab; a late-finishing older thread can overwrite the current selection
-  (`A:3910-3940`).
+The preview and details panes were removed; Quick Look (Space) is the only preview surface and it
+already follows the list selection while it is open.
+
+- Open: Space (or Ctrl+Space) on the highlighted entry, or the `Peek` action; `App.quick_look` picks the
+  mode — 0 built-in overlay, 1 PowerToys Peek, 2 off.
+- Overlay: a dimmed scrim plus a draggable, resizable rounded card with a title row (icon, name,
+  type · size, Open / Open with… / Close). Esc, a scrim click or Close dismisses it.
+- Body by kind: folders list their contents with counts; PDF / video / audio / HTML go to the embedded
+  WebView2 player (`webview::Want`); Markdown is rendered through `markdown.rs`; plain text and code are
+  syntax-highlighted; anything else falls back to a metadata block.
+- Text preview: background thread reads 64 KiB; UTF-16LE BOM decoded, a NUL byte in the first 8 KiB means
+  binary, else UTF-8 lossy (`F:967-987`). The slot lives on the `QuickLook` value, so closing the overlay
+  drops it (`A:495-507`, `5798-5812`).
 
 ---
 
@@ -412,7 +415,7 @@ flowchart LR
 
 | Change | Effect |
 |---|---|
-| Toggle hidden / extensions / preview / view | mutate `App`, mark views dirty (hidden also relabels the group set) |
+| Toggle hidden / extensions / view | mutate `App`, mark views dirty (hidden also relabels the group set) |
 | Sort / group | global; `Action::Sort` marks **all** tabs dirty (`A:1924-1932`) |
 | Theme | `apply_theme(ctx, accent, theme)` immediately; persisted index (`A:2643-2647`) |
 | Language | `apply_lang`, recreate `known`, clear `type_names`, refresh drives, mark views dirty (`A:2657-2661`) |
@@ -473,7 +476,7 @@ autosave every 3 s, on park, on bookmark change and on exit.
 | Menu leaves mouse stuck | missing `inject_release` after native menu/OLE (`A:1883-1895`, `4510-4518`) |
 | One-frame lag on actions | by design: `Action` queue applied at end of frame (`A:4498-4500`) |
 | Gallery empty or raw CLSID shown | wrong Gallery CLSID, `is_gallery()`/`is_home()` guard, `tab::GALLERY` mismatch (`T:16-27`, `F:spawn_gallery`) |
-| Gallery preview says "select an item" | `preview_panel` `home` must exclude `is_gallery()` (`A:5781-5786`) |
+| Gallery preview says "select an item" | gone: Quick Look previews the highlighted entry (`preview_body`) |
 | Gallery sort menu does nothing | intentional: Gallery forces modified-desc in `rebuild_view` |
 | WSL node missing | `wsl.exe --list --quiet` failed/empty, 10 s cache, or non-Windows build (`wsl.rs`) |
 
@@ -488,7 +491,7 @@ These were added after the 0.7.0 docs pass; line anchors in sections 1-19 may ha
 | **System scaling / font** | `system::text_scale()` → `ctx.set_zoom_factor`; Segoe UI Variable; PerMonitorV2 manifest; `system::animations_enabled()` gates motion |
 | **Window chrome** | first frame: `system::set_hwnd(hwnd)` + `system::apply_backdrop(hwnd)` → DWM rounded corners (`DWMWA_WINDOW_CORNER_PREFERENCE`) and immersive dark frame. Mica is *not* used: eframe's glow surface presents opaque |
 | **Modern context menu** | right-click → `ShellMenu::build` → allowlisted `menu::Node` tree → `menu::show`; "Show more options" → native classic menu (see §13) |
-| **Gallery** | sidebar row → `GALLERY` sentinel → `fx::spawn_gallery` (Pictures tree, images+videos, 5000 cap) → forced modified-desc + month/year groups → preview pane works; search roots = Pictures |
+| **Gallery** | sidebar row → `GALLERY` sentinel → `fx::spawn_gallery` (Pictures tree, images+videos, 5000 cap) → forced modified-desc + month/year groups → Quick Look works; search roots = Pictures |
 | **WSL** | `wsl::distros()` (UTF-8/UTF-16LE, 10 s cache) → "Linux" sidebar node → `\\wsl.localhost\<distro>` through the normal directory pipeline |
 | **Installer** | `packaging/windows/swift-explorer.iss`: per-user Inno Setup, Start Menu shortcut, optional desktop shortcut, AUMID `SwiftExplorer.App`, uninstaller; `swift-explorer.exe --uninstall-cleanup` removes autostart/registry leftovers. Self-update and portable zip stay supported |
 | **New submenu** | `newfile.rs` templates (`Action::New(index)`); separate contribution, same menu renderer |

@@ -67,25 +67,34 @@ swift-explorer.exe [path]
 
 | File | Lines | Role | Compiled when |
 |---|---|---|---|---|
-| `src/main.rs` | 87 | Entry, args (`--background`, `--after-update`, `--uninstall-cleanup`), single-instance handoff, eframe options | always |
-| `src/app.rs` | ~6740 | `App` state, every panel/view/menu/dialog, action dispatch, shortcuts, theme, fonts, update polling, Gallery/WSL sidebar | always |
-| `src/tab.rs` | ~620 | `Tab`: path, entries, filtered view, selection, history, loader, watcher, search, groups; virtual `GALLERY` page | always |
-| `src/fsutil.rs` | ~1330 | `Entry`, sorting, wildcards, listing loader, search, Gallery scan, jobs (copy/move/delete/restore/size), formatting, preview read | always |
+| `src/main.rs` | ~100 | Entry, args (`--background`, `--after-update`, `--uninstall-cleanup`), single-instance handoff, eframe options | always |
+| `src/app.rs` | ~8600 | `App` state, every panel/view/menu/dialog, action dispatch, shortcuts, theme, fonts, update polling, Gallery/WSL sidebar | always |
+| `src/palette.rs` | ~2365 | Ctrl+K command palette: entry/command/path/recent rows, `;`-prefix scopes, live narrowing, "show all results" hand-off | always |
+| `src/tab.rs` | ~625 | `Tab`: path, entries, filtered view, selection, history, loader, watcher, search, groups; virtual `GALLERY` page | always |
+| `src/fsutil.rs` | ~1360 | `Entry`, sorting, wildcards, listing loader, search, Gallery scan, jobs (copy/move/delete/restore/size), formatting, preview read | always |
+| `src/query.rs` | ~400 | Search/filter grammar (`ext:`, `type:`, `size:`, `modified:`, `kind:`, `-word`) shared by the instant filter and the recursive search | always |
 | `src/images.rs` | ~390 | Icon/thumbnail worker pool + texture cache (keys, LRU, dedupe, startup warm-up); local image decode fallback | always |
+| `src/highlight.rs` | ~830 | Single-pass syntax highlighter for Quick Look and Markdown code blocks (allocation-free scan) | always |
+| `src/markdown.rs` | ~440 | Markdown rendering for Quick Look (`pulldown-cmark` events → egui) | always |
+| `src/media.rs` | ~50 | Extension → embedded player kind (PDF / video / audio / HTML) | always |
+| `src/webview.rs` | ~420 | WebView2 child window for the PDF/audio/video/HTML Quick Look player | Windows |
+| `src/webview_unix.rs` | ~45 | Preview fallback with no embedded player | non-Windows |
 | `src/menu.rs` | ~660 | Windows 11 style modern context menu renderer (shell verb tree, Fluent icons, submenus, quick actions) | always |
-| `src/system.rs` | ~120 | Windows text scale, animation setting, DPI awareness, AUMID, DWM rounded corners/immersive dark frame | always |
+| `src/system.rs` | ~200 | Windows text scale, animation setting, DPI awareness, AUMID, DWM rounded corners/immersive dark frame | always |
 | `src/wsl.rs` | ~75 | WSL distro discovery (`wsl.exe --list --quiet`, UTF-16LE fallback, 10 s cache) | Windows (stub elsewhere) |
 | `src/newfile.rs` | ~370 | "New" submenu document templates (other contributors' feature) | always |
-| `src/shell.rs` | ~940 | Win32: `IShellItemImageFactory` icons, shell verb tree, type names, native context menu, OLE drag-out, DWM cloak, resize subclass | Windows |
-| `src/shell_unix.rs` | ~250 | freedesktop icons (theme lookup, SVG via resvg, `image` thumbnails), type names, stubs | non-Windows |
+| `src/git.rs` | ~215 | Repository info: branch from `.git/HEAD`, file statuses via `git status --porcelain=v2` | always |
+| `src/diag.rs` | ~60 | Console-less crash diagnostics (`%APPDATA%\SwiftExplorer\panic.log` + event trail) | always |
+| `src/shell.rs` | ~980 | Win32: `IShellItemImageFactory` icons, shell verb tree, type names, native context menu, OLE drag-out, DWM cloak, resize subclass | Windows |
+| `src/shell_unix.rs` | ~275 | freedesktop icons (theme lookup, SVG via resvg, `image` thumbnails), type names, stubs | non-Windows |
 | `src/win.rs` | ~630 | Win32: drives, clipboard (CF_HDROP), single instance, autostart, default file manager, properties, terminals, DWM accent | Windows |
 | `src/win_unix.rs` | ~310 | mounts, `statvfs`, xdg-mime, FileManager1 D-Bus, terminals, Flatpak `flatpak-spawn` | non-Windows |
 | `src/properties.rs` | ~1050 | Own Properties window: General/Security/Details tabs, permissions, size scan, default-app chooser | non-Windows |
 | `src/desktop_apps.rs` | ~200 | `.desktop` scanning, localized names, MIME associations | non-Windows |
 | `src/update.rs` | ~280 | `latest.json` fetch, SHA-256, exe swap, `.pending` rollback, `launch_hidden` | always |
-| `src/i18n.rs` | ~570 | Turkish-key tables, `LANGS`, `t()`, `tf()`, plural heuristics, language detection | always |
+| `src/i18n.rs` | ~610 | Turkish-key tables, `LANGS`, `t()`, `tf()`, plural heuristics, language detection | always |
 | `src/scheme.rs` | ~210 | 12 colour schemes + process-global active scheme | always |
-| `src/screenshot.rs` | ~160 | Feature-gated self-screenshot/input harness (`click:`, `hover:`, `rclick:`) | `feature = "screenshot"` |
+| `src/screenshot.rs` | ~190 | Feature-gated self-screenshot/input harness (`click:`, `hover:`, `rclick:`) | `feature = "screenshot"` |
 | `build.rs` | 13 | Embeds icon/manifest for GNU Windows targets via `winresource` | build script |
 | `packaging/windows/swift-explorer.iss` | — | Inno Setup per-user installer/uninstaller (Start Menu, optional desktop shortcut, AUMID) | installer only |
 | `src/i18n/{de,es,fr,pt,ru,zh,ja}.rs` | ~20 KB each | One table per language, key = Turkish source string | always |
@@ -194,7 +203,7 @@ Order matters; it is the de-facto contract of the UI.
 | 16 | refresh drives every 20 s; 20 s heartbeat repaint | 4422-4426 |
 | 17 | external OS drop → copy into current folder | 4428-4436 |
 | 18 | `handle_keys(ctx, &mut actions)` | 4438 |
-| 19 | panels: tabs (34 px) → nav → command → status (23 px) → sidebar → preview → central | 4440-4477 |
+| 19 | panels: tabs (34 px) → toolbar card → status (23 px) → sidebar card → central card | 8369-8448 |
 | 20 | `dialogs` → `overlays` (jobs/toasts) → `drag_overlay` | 4479-4481 |
 | 21 | drag-out to OS when cursor leaves the window with a payload | 4483-4496 |
 | 22 | **apply all queued actions** | 4498-4500 |
@@ -207,7 +216,8 @@ menu or OLE drag, because those swallow the real mouse-up. `on_exit` cancels sea
 Added after the six-phase work: `quick_look_ui` draws the built-in Quick Look overlay after `overlays`
 and before `drag_overlay`; then `web.sync(hwnd, want, allow, ctx)` positions/hides the WebView2 child
 window using this frame's `App.web_want` (cleared right after).
-`web_want` is written by whichever surface drew a PDF/video/audio preview last (Quick Look wins).
+`web_want` is written by Quick Look when it shows a PDF/video/audio/HTML item; Quick Look is the only
+embedded-player surface now that the preview pane is gone.
 
 **Repaint policy** (no continuous repaint): input events; 8 ms while a scroll gesture or touchpad
 momentum is in flight; 100 ms while jobs run; 250 ms while toasts are visible; 20 s heartbeat;
@@ -224,12 +234,12 @@ locked to the display's refresh, which gives touchpad pan a regular frame cadenc
 
 | Group | Fields |
 |---|---|
-| Tabs/view | `tabs: Vec<Tab>`, `active`, `sort: SortKey`, `asc`, `show_hidden`, `show_preview`, `show_ext`, `view_level: usize`, `grid_cols` |
+| Tabs/view | `tabs: Vec<Tab>`, `active`, `sort: SortKey`, `asc`, `show_hidden`, `show_ext`, `view_level: usize`, `grid_cols` |
 | Places | `bookmarks`, `recent`, `grouped: Vec<PathBuf>` (folders grouped by date), `known` (localized known folders), `tree_open: HashSet<PathBuf>` |
 | Lifecycle | `background`, `resident`, `autostart`, `start_hidden`, `revealed`, `frames`, `hwnd` |
 | Update | `auto_update: Arc<AtomicBool>`, `update_rx`, `update_wake`, `last_update_check: Arc<AtomicU64>`, `update_installed` |
 | File ops | `clipboard: Option<(Vec<PathBuf>, bool)>` (paths, cut), `jobs: Vec<Arc<Job>>`, `silent_jobs: Vec<usize>`, `dir_sizes`, `undo: Vec<UndoOp>` |
-| UI transient | `dialog: Dialog`, `address_edit`, `address_focus`, `focus_search`, `type_buf`/`type_time` (type-ahead), `renaming`, `marquee`, `item_rects`, `inject_release`, `toasts` |
+| UI transient | `dialog: Dialog`, `address_edit`, `address_focus`, `type_buf`/`type_time` (type-ahead), `renaming`, `marquee`, `item_rects`, `inject_release`, `toasts` |
 | Caches | `images: ImageCache`, `type_names: HashMap<String,String>`, `subdirs: HashMap<PathBuf, Arc<[PathBuf]>>` + pending set + channel, `drives: Arc<Mutex<Vec<DriveInfo>>>` |
 | Persistence | `saved_config: String`, `last_autosave` |
 
@@ -296,7 +306,7 @@ Serialized pretty JSON, rewritten only when the string changes (`app.rs:1202-120
 |---|---|---|
 | `bookmarks` | `Vec<PathBuf>` | pinned Quick access entries |
 | `tabs`, `active` | `Vec<PathBuf>`, `usize` | restore tab set; `""` = Home, `THIS_PC` GUID = This PC |
-| `show_hidden`, `show_preview`, `show_ext` | bool | View toggles |
+| `show_hidden`, `show_ext` | bool | View toggles |
 | `sort`, `asc` | `SortKey`, bool | Name/Modified/Type/Size + direction (global) |
 | `view_level` | `usize` | 0 = Details, 1..4 = 32/48/96/256 px icons (`VIEW_LEVELS`, `app.rs:21`) |
 | `theme` | `u8` | 0 system, 1 light, 2 dark, ≥3 → `SCHEMES[theme-3]` |
@@ -321,8 +331,8 @@ Its existence is used as the "not first run → don't force maximize" heuristic 
 
 ### 9.3 Runtime-only state (lost on exit)
 
-Undo stack, clipboard snapshot, jobs, dialogs, tree expansion, scroll positions, preview, toasts, search
-results, `subdirs` cache, image cache.
+Undo stack, clipboard snapshot, jobs, dialogs, tree expansion, scroll positions, Quick Look state,
+the command palette state, toasts, search results, `subdirs` cache, image cache.
 
 ### 9.4 Index stability
 
@@ -384,7 +394,7 @@ Known asymmetries (do not "fix" by assuming symmetry): `open_terminal` returns `
 | Scan | `fsutil::spawn_gallery` walks `dirs::picture_dir()` (Pictures, including OneDrive redirection) recursively, skips hidden/reparse dirs, keeps image + video extensions, caps at 5000, returns one batch |
 | Ordering | `Tab::rebuild_view` forces `SortKey::Modified`, descending, and groups by month/year (`October 2026`) |
 | Loading | `Tab::navigate`/`load` special-case `is_gallery()` because `is_home()` is true for it; no watcher, no free-space query |
-| Guards | `is_home()` stays true, so paste/new/delete guards keep Gallery read-only; `preview_panel` treats it as a file page, not the empty Home page |
+| Guards | `is_home()` stays true, so paste/new/delete guards keep Gallery read-only; Quick Look previews it like any file page |
 | Search | `Action::StartSearch` uses `dirs::picture_dir()` as the root when the tab is Gallery |
 | Thumbnails | `shell_image` first; on failure `images::decode_photo` decodes png/jpg/gif/webp/bmp/tiff locally (≤48 MB) so offline/OneDrive placeholders still render |
 
