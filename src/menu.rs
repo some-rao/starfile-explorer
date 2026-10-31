@@ -177,6 +177,20 @@ impl Style {
     fn new(ctx: &egui::Context) -> Style {
         let dark = ctx.style().visuals.dark_mode;
         let accent = ctx.style().visuals.selection.bg_fill;
+        // Renk şeması seçiliyse menüler de onu izler; yalnızca Sistem/Açık/Koyu
+        // seçiliyken aşağıdaki iki nötr palet kullanılır.
+        if let Some(c) = crate::scheme::active().filter(|c| c.dark == dark) {
+            return Style {
+                bg: if dark { c.surface } else { c.base },
+                border: c.border,
+                text: c.text,
+                weak: c.weak,
+                disabled: c.disabled,
+                hover: crate::scheme::mix(c.base, c.surface, 0.7),
+                accent,
+                dark,
+            };
+        }
         if dark {
             Style {
                 bg: Color32::from_rgb(43, 43, 43),

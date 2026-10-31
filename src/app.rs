@@ -906,7 +906,31 @@ struct Pal {
     disabled: Color32,
 }
 
+/// Pencere yüzeyi gerçek alfa kanalına sahipse (Mica camı için) tuval ve sekme şeridi
+/// yarı saydam çizilir. `App::new` GL yüzeyinin alfa bitlerine bakarak ayarlar.
+static GLASS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Cam efekti etkin mi (bkz. `GLASS`).
+pub(crate) fn glass() -> bool {
+    GLASS.load(Relaxed)
+}
+
+/// `c`'ye alfa ekler; şema renkleri opak üretildiği için cam modunda buradan geçer.
+fn translucent(c: Color32, a: u8) -> Color32 {
+    Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)
+}
+
+/// Cam modunda tuval/şerit yüzeylerini yarı saydam, aksi halde opak döndürür.
 fn pal(dark: bool) -> Pal {
+    let mut p = pal_solid(dark);
+    if glass() {
+        p.strip = translucent(p.strip, 210);
+        p.canvas = translucent(p.canvas, 198);
+    }
+    p
+}
+
+fn pal_solid(dark: bool) -> Pal {
     if let Some(c) = scheme::active().filter(|c| c.dark == dark) {
         let sel = if dark { 0.28 } else { 0.22 };
         return Pal {
@@ -1099,14 +1123,15 @@ fn apply_theme(ctx: &egui::Context, accent: Color32, theme: u8) {
             w.noninteractive.fg_stroke.color = c.label;
         });
     }
-    // Pencere çerçevesi: yuvarlatılmış köşeler ve koyu başlık
+    // Pencere çerçevesi: yuvarlatılmış köşeler, Mica camı ve temaya uygun kenarlık
     let dark_frame = match (scheme::get(theme), theme) {
         (Some(c), _) => c.dark,
         (None, 1) => false,
         (None, 2) => true,
         _ => ctx.style().visuals.dark_mode,
     };
-    crate::system::apply_backdrop(dark_frame);
+    let line = pal(dark_frame).line;
+    crate::system::apply_backdrop(dark_frame, (line.r(), line.g(), line.b()), glass());
 }
 
 /// Ölçek: yerleşim (pencere, kenar boşlukları, simgeler) yalnızca monitör DPI'sına uyar;
@@ -3888,18 +3913,16 @@ impl App {
                 });
             }
 
-            // Bölünmüş görünüm
+            // Bölünmüş görünüm: menüsüz, tek tıkla aç/kapat. Etkinken seçili görünür.
             {
-                let b = menu_btn(ui, g::PANE, crate::i18n::t("Bölünmüş görünüm"), true);
-                egui::menu::menu_custom_button(ui, b, |ui| {
-                    if ui
-                        .selectable_label(split_on, crate::i18n::t("Bölünmüş görünüm"))
-                        .clicked()
-                    {
-                        actions.push(Action::ToggleSplit);
-                        ui.close_menu();
-                    }
-                });
+                let b = menu_btn(ui, g::PANE, crate::i18n::t("Bölünmüş"), true).selected(split_on);
+                if ui
+                    .add(b)
+                    .on_hover_text(crate::i18n::t("Bölünmüş görünüm"))
+                    .clicked()
+                {
+                    actions.push(Action::ToggleSplit);
+                }
             }
 
             // Daha fazla
@@ -4018,28 +4041,16 @@ impl App {
                 },
             );
 
-            // Palet açıcı: yazılmayan küçük alan, "Ctrl + K" ipucu
-            let (rect, resp) = ui.allocate_exact_size(egui::vec2(launcher_w, 30.0), Sense::click());
-            let tint = if resp.hovered() { p.hover } else { p.field };
-            ui.painter().rect_filled(rect, R_CTRL, tint);
-            let fg = if resp.hovered() { p.text } else { p.weak };
-            ui.painter().text(
-                Pos2::new(rect.left() + 15.0, rect.center().y),
-                Align2::LEFT_CENTER,
-                g::SEARCH,
-                fluent_font(13.0),
-                fg,
-            );
-            let galley = ui.fonts(|f| f.layout_no_wrap("Ctrl + K".to_string(), ui_font(12.0), fg));
-            ui.painter().galley(
-                Pos2::new(rect.left() + 28.0, rect.center().y - galley.size().y / 2.0),
-                galley,
-                fg,
-            );
-            if resp.clicked() {
+            // Komut paleti: yol çubuğunun yanındaki normal düğme ("Ctrl + K")
+            let launcher = egui::Button::new(glyph_job(ui, g::SEARCH, None, "Ctrl + K", false))
+                .min_size(egui::vec2(launcher_w, 30.0));
+            if ui
+                .add(launcher)
+                .on_hover_text(crate::i18n::t("Komut paletini aç (Ctrl+K)"))
+                .clicked()
+            {
                 actions.push(Action::TogglePalette);
             }
-            resp.on_hover_text(crate::i18n::t("Komut paletini aç (Ctrl+K)"));
         });
 
         // Etkin arama ve sorgu çipleri (ext:pdf, size:>1mb, -taslak ...): tek tıkla kaldırılır
@@ -8148,6 +8159,15 @@ fn resize_edges(ctx: &egui::Context) {
 }
 
 impl eframe::App for App {
+    /// Mica camı istemci alanının altından görünsün diye arka planı saydam temizle.
+    /// Cam kapalıysa tuval rengi (opak) kullanılır.
+    fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        if glass() {
+            return [0.0, 0.0, 0.0, 0.0];
+        }
+        pal(visuals.dark_mode).canvas.to_normalized_gamma_f32()
+    }
+
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         #[cfg(feature = "screenshot")]
         crate::screenshot::tick(ctx);
@@ -8164,7 +8184,16 @@ impl eframe::App for App {
                     let hwnd = w.hwnd.get();
                     self.hwnd = Some(hwnd);
                     crate::system::set_hwnd(hwnd);
-                    crate::system::apply_backdrop(ctx.style().visuals.dark_mode);
+                    // Pencere yüzeyi gerçek alfa kanalı taşıyorsa Mica camı görünür;
+                    // taşımıyorsa tuval opak kalır (bkz. `GLASS`).
+                    let alpha = crate::system::window_alpha_bits(hwnd);
+                    let was = GLASS.swap(alpha > 0, Relaxed);
+                    if was != glass() {
+                        ctx.request_repaint();
+                    }
+                    let dark = ctx.style().visuals.dark_mode;
+                    let line = pal(dark).line;
+                    crate::system::apply_backdrop(dark, (line.r(), line.g(), line.b()), glass());
                     shell::install_subclass(hwnd);
                     // eframe pencereyi ilk kareden sonra gösterir; o an DWM henüz
                     // GL yüzeyini almadığından bir kare beyaz parlar. Hazır olana dek gizle.
@@ -8390,8 +8419,8 @@ impl eframe::App for App {
                     .inner_margin(egui::Margin {
                         left: 8,
                         right: 8,
-                        top: 6,
-                        bottom: 6,
+                        top: 8,
+                        bottom: 0,
                     }),
             )
             .show_separator_line(false)
@@ -8404,8 +8433,8 @@ impl eframe::App for App {
                 egui::Frame::new()
                     .fill(pl.canvas)
                     .inner_margin(egui::Margin {
-                        left: 14,
-                        right: 8,
+                        left: 12,
+                        right: 12,
                         top: 0,
                         bottom: 0,
                     }),
@@ -8423,8 +8452,8 @@ impl eframe::App for App {
                     .fill(pl.canvas)
                     .inner_margin(egui::Margin {
                         left: 8,
-                        right: 8,
-                        top: 0,
+                        right: 4,
+                        top: 8,
                         bottom: 8,
                     }),
             )
@@ -8437,9 +8466,9 @@ impl eframe::App for App {
                 egui::Frame::new()
                     .fill(pl.canvas)
                     .inner_margin(egui::Margin {
-                        left: 8,
+                        left: 4,
                         right: 8,
-                        top: 2,
+                        top: 8,
                         bottom: 8,
                     }),
             )

@@ -548,6 +548,7 @@ static TABLE: &[(&str, &str)] = &[
     ("Kod vurgulama", "Syntax highlighting"),
     ("Yerleşik Hızlı Önizleme", "Built-in Quick Look"),
     ("Kapalı", "Off"),
+    ("Bölünmüş", "Split"),
     ("Bölünmüş görünüm", "Split view"),
     ("Bölünmüş görünümü kapat", "Close split view"),
     ("Klasör içeriği", "Folder contents"),

@@ -346,6 +346,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Kod vurgulama", "语法高亮"),
     ("Yerleşik Hızlı Önizleme", "内置快速查看"),
     ("Kapalı", "关闭"),
+    ("Bölünmüş", "分屏"),
     ("Bölünmüş görünüm", "分屏视图"),
     ("Bölünmüş görünümü kapat", "关闭分屏视图"),
     ("Klasör içeriği", "文件夹内容"),

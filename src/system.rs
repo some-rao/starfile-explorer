@@ -45,9 +45,11 @@ mod imp {
 
     use windows::Win32::Foundation::{BOOL, HWND};
     use windows::Win32::Graphics::Dwm::{
-        DwmSetWindowAttribute, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
+        DwmExtendFrameIntoClientArea, DwmSetWindowAttribute, DWMSBT_MAINWINDOW, DWMWA_BORDER_COLOR,
+        DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
         DWMWCP_ROUND,
     };
+    use windows::Win32::UI::Controls::MARGINS;
     use windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         SystemParametersInfoW, SPI_GETCLIENTAREAANIMATION, SPI_GETWHEELSCROLLLINES,
@@ -164,12 +166,51 @@ mod imp {
         lines.clamp(1, 12)
     }
 
-    /// Yuvarlatılmış köşeler ve koyu pencere çerçevesi.
+    /// Pencerenin GL piksel biçimindeki alfa biti sayısı.
     ///
-    /// `DWMWA_USE_IMMERSIVE_DARK_MODE` özel başlık çubuğu kullanan pencerelerde ince
-    /// çerçeveyi/gölgeyi koyu moda uyarlar; `DWMWA_WINDOW_CORNER_PREFERENCE` Windows 11'in
-    /// yuvarlatılmış köşelerini etkinleştirir. Windows 10'da ikinci çağrı hata verir, zararsız.
-    pub fn apply_backdrop(dark: bool) {
+    /// Mica camının görünmesi için yüzeyin gerçekten saydam olması gerekir; bu sayı
+    /// 0 ise saydamlık yoktur ve tuval opak kalmalıdır (aksi halde arka plan olduğundan
+    /// daha koyu görünür). glutin pencere DC'sine biçimi kurduktan sonra okunur.
+    pub fn window_alpha_bits(hwnd: isize) -> u8 {
+        use windows_sys::Win32::Graphics::Gdi::{GetDC, ReleaseDC};
+        use windows_sys::Win32::Graphics::OpenGL::{
+            DescribePixelFormat, GetPixelFormat, PIXELFORMATDESCRIPTOR,
+        };
+        unsafe {
+            let hwnd = hwnd as *mut c_void;
+            let hdc = GetDC(hwnd);
+            if hdc.is_null() {
+                return 0;
+            }
+            let mut pfd: PIXELFORMATDESCRIPTOR = std::mem::zeroed();
+            let fmt = GetPixelFormat(hdc);
+            let n = DescribePixelFormat(
+                hdc,
+                fmt,
+                std::mem::size_of::<PIXELFORMATDESCRIPTOR>() as u32,
+                &mut pfd,
+            );
+            ReleaseDC(hwnd, hdc);
+            if n == 0 {
+                0
+            } else {
+                pfd.cAlphaBits
+            }
+        }
+    }
+
+    /// Yuvarlatılmış köşeler, Mica (buzlu cam) arka planı ve temaya uygun kenarlık.
+    ///
+    /// - `DWMWA_USE_IMMERSIVE_DARK_MODE`: özel başlık çubuğu kullanan pencerelerde ince
+    ///   çerçeveyi/gölgeyi koyu moda uyarlar.
+    /// - `DWMWA_WINDOW_CORNER_PREFERENCE`: Windows 11'in yuvarlatılmış köşeleri.
+    /// - `DWMWA_BORDER_COLOR`: varsayılan gri kenar çizgisi yerine temanın ayraç rengi.
+    /// - `DWMWA_SYSTEMBACKDROP_TYPE = Mica` + istemci alanının çerçeveye çevrilmesi:
+    ///   pencere arkasında masaüstü tonlu, bulanık bir yüzey. Yalnızca `glass` açıkken
+    ///   uygulanır (bkz. `window_alpha_bits`); tuval/şerit yarı saydam çizilerek görünür.
+    ///
+    /// Windows 10'da desteklenmeyen çağrılar sessizce başarısız olur, zararsız.
+    pub fn apply_backdrop(dark: bool, border: (u8, u8, u8), glass: bool) {
         let hwnd = super::HWND.load(Ordering::Relaxed);
         if hwnd == 0 {
             return;
@@ -190,6 +231,32 @@ mod imp {
                 &corner as *const _ as *const c_void,
                 std::mem::size_of_val(&corner) as u32,
             );
+            // DWM kenarlık rengi COLORREF'tir: 0x00BBGGRR
+            let color: u32 = border.0 as u32 | ((border.1 as u32) << 8) | ((border.2 as u32) << 16);
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_BORDER_COLOR,
+                &color as *const _ as *const c_void,
+                std::mem::size_of::<u32>() as u32,
+            );
+            if !glass {
+                return;
+            }
+            let backdrop = DWMSBT_MAINWINDOW;
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_SYSTEMBACKDROP_TYPE,
+                &backdrop as *const _ as *const c_void,
+                std::mem::size_of_val(&backdrop) as u32,
+            );
+            // İstemci alanının tamamını çerçeveye çevir; Mica kartların arkasında kalsın.
+            let margins = MARGINS {
+                cxLeftWidth: -1,
+                cxRightWidth: -1,
+                cyTopHeight: -1,
+                cyBottomHeight: -1,
+            };
+            let _ = DwmExtendFrameIntoClientArea(hwnd, &margins);
         }
     }
 }
@@ -219,7 +286,12 @@ mod imp {
         3
     }
 
-    pub fn apply_backdrop(_dark: bool) {}
+    /// Linux'ta Mica yok; pencere yüzeyi saydam sayılmaz.
+    pub fn window_alpha_bits(_hwnd: isize) -> u8 {
+        0
+    }
+
+    pub fn apply_backdrop(_dark: bool, _border: (u8, u8, u8), _glass: bool) {}
 }
 
 pub use imp::*;
