@@ -7533,78 +7533,100 @@ impl App {
         ui.horizontal(|ui| {
             ui.set_min_height(18.0);
             ui.spacing_mut().item_spacing.x = 8.0;
-            let bar = |ui: &mut egui::Ui| {
-                let (r, _) = ui.allocate_exact_size(egui::vec2(1.0, 12.0), Sense::hover());
-                ui.painter()
-                    .vline(r.center().x, r.y_range(), Stroke::new(1.0_f32, p.text));
-            };
-            let t = &self.tabs[self.active];
-            let count = if t.lists_files() {
-                t.view.len()
-            } else if t.is_pc() {
-                self.drives.lock().unwrap().len()
-            } else {
-                0
-            };
-            if t.lists_files() || t.is_pc() {
-                ui.label(crate::i18n::tf("{} öğe", &[&fmt_count(count)]));
-                bar(ui);
+            // Sol taraf parça parça toplanır; ayraçlar yalnızca iki parçanın
+            // arasına girer, böylece sonda sarkan bir "|" kalmaz.
+            enum Seg {
+                Text(String, bool),
+                Spinner,
             }
-            if t.lists_files() {
-                let sel = t.view.iter().filter(|i| t.selection.contains(i)).count();
-                if !t.filter.is_empty() && t.search.is_none() {
-                    ui.label(
-                        RichText::new(crate::i18n::tf(
-                            "(filtre: {} / {})",
-                            &[&t.view.len(), &t.entries.len()],
-                        ))
-                        .color(p.weak),
-                    );
+            let mut segs: Vec<Seg> = Vec::new();
+            {
+                let t = &self.tabs[self.active];
+                let count = if t.lists_files() {
+                    t.view.len()
+                } else if t.is_pc() {
+                    self.drives.lock().unwrap().len()
+                } else {
+                    0
+                };
+                if t.lists_files() || t.is_pc() {
+                    segs.push(Seg::Text(
+                        crate::i18n::tf("{} öğe", &[&fmt_count(count)]),
+                        false,
+                    ));
                 }
-                if sel > 0 {
-                    let size: u64 = t
-                        .view
-                        .iter()
-                        .filter(|i| t.selection.contains(i))
-                        .map(|&i| t.entries[i].size)
-                        .sum();
-                    let s = if size > 0 {
-                        crate::i18n::tf("{} öğe seçildi  {}", &[&sel, &fsutil::format_size(size)])
-                    } else {
-                        crate::i18n::tf("{} öğe seçildi", &[&sel])
-                    };
-                    ui.label(s);
-                    bar(ui);
-                }
-                if let Some(srch) = &t.search {
-                    let scope = match t.scope {
-                        SearchScope::Folder => crate::i18n::t("Bu klasör"),
-                        SearchScope::Subfolders => crate::i18n::t("Alt klasörler dahil"),
-                        SearchScope::ThisPc => crate::i18n::t("Bu bilgisayar"),
-                    };
-                    ui.label(RichText::new(scope).color(p.weak));
-                    bar(ui);
-                    let scanned = srch.handle.scanned.load(Relaxed);
-                    if srch.done {
-                        ui.label(
-                            RichText::new(crate::i18n::tf(
-                                "Arama tamamlandı · {} klasör · {} sn",
-                                &[&scanned, &format!("{:.2}", srch.elapsed.as_secs_f32())],
-                            ))
-                            .color(p.weak),
-                        );
-                    } else {
-                        ui.spinner();
-                        ui.label(
-                            RichText::new(crate::i18n::tf(
-                                "Aranıyor… {} klasör tarandı",
-                                &[&scanned],
-                            ))
-                            .color(p.weak),
-                        );
+                if t.lists_files() {
+                    if !t.filter.is_empty() && t.search.is_none() {
+                        segs.push(Seg::Text(
+                            crate::i18n::tf(
+                                "(filtre: {} / {})",
+                                &[&t.view.len(), &t.entries.len()],
+                            ),
+                            true,
+                        ));
                     }
-                } else if t.is_loading() {
-                    ui.spinner();
+                    let sel = t.view.iter().filter(|i| t.selection.contains(i)).count();
+                    if sel > 0 {
+                        let size: u64 = t
+                            .view
+                            .iter()
+                            .filter(|i| t.selection.contains(i))
+                            .map(|&i| t.entries[i].size)
+                            .sum();
+                        segs.push(Seg::Text(
+                            if size > 0 {
+                                crate::i18n::tf(
+                                    "{} öğe seçildi  {}",
+                                    &[&sel, &fsutil::format_size(size)],
+                                )
+                            } else {
+                                crate::i18n::tf("{} öğe seçildi", &[&sel])
+                            },
+                            false,
+                        ));
+                    }
+                    if let Some(srch) = &t.search {
+                        let scope = match t.scope {
+                            SearchScope::Folder => crate::i18n::t("Bu klasör"),
+                            SearchScope::Subfolders => crate::i18n::t("Alt klasörler dahil"),
+                            SearchScope::ThisPc => crate::i18n::t("Bu bilgisayar"),
+                        };
+                        segs.push(Seg::Text(scope.to_string(), true));
+                        let scanned = srch.handle.scanned.load(Relaxed);
+                        if srch.done {
+                            segs.push(Seg::Text(
+                                crate::i18n::tf(
+                                    "Arama tamamlandı · {} klasör · {} sn",
+                                    &[&scanned, &format!("{:.2}", srch.elapsed.as_secs_f32())],
+                                ),
+                                true,
+                            ));
+                        } else {
+                            segs.push(Seg::Spinner);
+                            segs.push(Seg::Text(
+                                crate::i18n::tf("Aranıyor… {} klasör tarandı", &[&scanned]),
+                                true,
+                            ));
+                        }
+                    } else if t.is_loading() {
+                        segs.push(Seg::Spinner);
+                    }
+                }
+            }
+            for (i, s) in segs.iter().enumerate() {
+                if i > 0 {
+                    let (r, _) = ui.allocate_exact_size(egui::vec2(1.0, 12.0), Sense::hover());
+                    ui.painter()
+                        .vline(r.center().x, r.y_range(), Stroke::new(1.0_f32, p.line));
+                }
+                match s {
+                    Seg::Text(txt, weak) => {
+                        let rt = RichText::new(txt.as_str());
+                        ui.label(if *weak { rt.color(p.weak) } else { rt });
+                    }
+                    Seg::Spinner => {
+                        ui.spinner();
+                    }
                 }
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -8433,11 +8455,20 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 self.toolbar(ui, &mut actions);
             });
+        // Durum çubuğu akrilik zeminin parçası: kart değil, tam genişlikte ince bir
+        // şerit. Bulanıklık arkadan görünür; koyu temada beyaz yazı açık bir
+        // akrilik üzerinde kaybolmasın diye üstüne çok hafif bir tül serilir.
+        let status_h = (18.0 * text_factor()).round();
+        let status_fill = if glass() && ctx.style().visuals.dark_mode {
+            Color32::from_black_alpha(48)
+        } else {
+            pl.canvas
+        };
         egui::TopBottomPanel::bottom("status")
-            .exact_height((18.0 * text_factor()).round())
+            .exact_height(status_h)
             .frame(
                 egui::Frame::new()
-                    .fill(pl.canvas)
+                    .fill(status_fill)
                     .inner_margin(egui::Margin {
                         left: 12,
                         right: 12,
