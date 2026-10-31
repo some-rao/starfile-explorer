@@ -2465,6 +2465,18 @@ impl App {
     /// Kaydırma pompası durum yönetimi: harekette başlat, 400 ms sessizlikte durdur.
     ///
     fn handle_keys(&mut self, ctx: &egui::Context, actions: &mut Vec<Action>) {
+        // The command palette is modal. Handle its global keys before any widget
+        // is drawn, so Escape keeps working while the palette's text edit owns
+        // keyboard focus, and none of the list shortcuts leak through.
+        if self.palette.is_some() {
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                self.palette_back(ctx);
+            }
+            if ctx.input_mut(|i| shortcut(i, egui::Modifiers::CTRL, egui::Key::K)) {
+                actions.push(Action::TogglePalette);
+            }
+            return;
+        }
         let typing = ctx.wants_keyboard_input();
         let focused = ctx.input(|i| i.focused);
         let home = !self.tabs[self.active].lists_files();

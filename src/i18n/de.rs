@@ -382,4 +382,11 @@ pub static TABLE: &[(&str, &str)] = &[
     ("Kopyala", "Copy"),
     ("Kes", "Cut"),
     ("Sil", "Delete"),
-    ("↑↓ taşı   ↵ aç   → komutlar   Ctrl+↵ konumu göster   Esc kapat", "↑↓ move   ↵ open   → commands   Ctrl+↵ reveal   Esc close"),];
+    ("↑↓ taşı   ↵ aç   → komutlar   Ctrl+↵ konumu göster   Esc kapat", "↑↓ move   ↵ open   → commands   Ctrl+↵ reveal   Esc close"),
+    ("Dosya veya klasör ara", "Dateien oder Ordner suchen"),
+    ("Komut ara", "Befehle suchen"),
+    ("Sonuç yok", "Keine Ergebnisse"),
+    ("{} klasör · {} sonuç", "{} Ordner · {} Ergebnisse"),
+    ("Taranıyor…", "Wird gescannt…"),
+    ("↑↓ taşı   ↵ aç   → komutlar   ← geri   Esc kapat", "↑↓ bewegen   ↵ öffnen   → Befehle   ← zurück   Esc schließen"),
+];

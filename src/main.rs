@@ -3,6 +3,7 @@
 mod app;
 #[cfg(not(windows))]
 mod desktop_apps;
+mod diag;
 mod fsutil;
 mod git;
 mod highlight;
@@ -36,6 +37,7 @@ pub const APP_NAME: &str = "Swift Explorer";
 pub const APP_ID: &str = "io.github.misutesu_desu.SwiftExplorer";
 
 fn main() -> eframe::Result<()> {
+    diag::install();
     // Pencere oluşmadan: monitör başına DPI ve görev çubuğu kimliği
     system::apply_dpi_awareness();
     system::set_app_id();
