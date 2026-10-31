@@ -7530,8 +7530,7 @@ impl App {
         let p = pal_of(ui);
         // Git rozeti: depo bilgisi arka planda tazelenir (5 sn TTL)
         let git = self.git_snapshot(ui.ctx());
-        ui.horizontal(|ui| {
-            ui.set_min_height(18.0);
+        ui.horizontal_centered(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
             // Sol taraf parça parça toplanır; ayraçlar yalnızca iki parçanın
             // arasına girer, böylece sonda sarkan bir "|" kalmaz.
@@ -7621,8 +7620,13 @@ impl App {
                 }
                 match s {
                     Seg::Text(txt, weak) => {
-                        let rt = RichText::new(txt.as_str());
-                        ui.label(if *weak { rt.color(p.weak) } else { rt });
+                        // Durum çubuğu Explorer'da olduğu gibi gövde metninden
+                        // bir kademe küçüktür; ince şeride sığması da buna bağlı.
+                        let mut rt = RichText::new(txt.as_str()).size(text_size(12.0));
+                        if *weak {
+                            rt = rt.color(p.weak);
+                        }
+                        ui.label(rt);
                     }
                     Seg::Spinner => {
                         ui.spinner();
@@ -8456,14 +8460,9 @@ impl eframe::App for App {
                 self.toolbar(ui, &mut actions);
             });
         // Durum çubuğu akrilik zeminin parçası: kart değil, tam genişlikte ince bir
-        // şerit. Bulanıklık arkadan görünür; koyu temada beyaz yazı açık bir
-        // akrilik üzerinde kaybolmasın diye üstüne çok hafif bir tül serilir.
+        // şerit. Kendi dolgusu yok; arkadaki akrilik olduğu gibi görünür.
         let status_h = (18.0 * text_factor()).round();
-        let status_fill = if glass() && ctx.style().visuals.dark_mode {
-            Color32::from_black_alpha(48)
-        } else {
-            pl.canvas
-        };
+        let status_fill = pl.canvas;
         egui::TopBottomPanel::bottom("status")
             .exact_height(status_h)
             .frame(
