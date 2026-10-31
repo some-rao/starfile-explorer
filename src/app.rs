@@ -915,25 +915,17 @@ pub(crate) fn glass() -> bool {
     GLASS.load(Relaxed)
 }
 
-/// `c`'ye alfa ekler; şema renkleri opak üretildiği için cam modunda buradan geçer.
-fn translucent(c: Color32, a: u8) -> Color32 {
-    Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)
-}
-
-/// Cam modunda yüzeyleri yarı saydam, aksi halde opak döndürür.
+/// Cam modunda pencere zeminini (sekme şeridi, kartlar arası oluklar, durum
+/// çubuğu) tamamen saydam; kart yüzeyleri ise tema renginde **opak** bırakır.
 ///
-/// Alfa değerleri buzlu camın ne kadar görüneceğini belirler. Pencerenin neredeyse
-/// tamamı kartlarla kaplı olduğundan yalnızca tuvali/şeridi saydam yapmak yetmez:
-/// kartlar da yarı saydam olmalıdır, aksi halde camı örter. Tuval (kartlar arası
-/// oluklar) neredeyse tamamen saydamdır; sekme şeridi ve kartlar okunurluk için
-/// daha doludur. Hepsi akrilik katmanın üzerine biner.
+/// Tasarım: üç kart (içerik, kenar çubuğu, araç çubuğu) tema renginde durur,
+/// arkalarındaki pencere ise akrilik buzlu camdır. Camın görünmesi için zemini
+/// boyamamak gerekir; kartlar opak olduğundan metin okunurluğu değişmez.
 fn pal(dark: bool) -> Pal {
     let mut p = pal_solid(dark);
     if glass() {
-        p.strip = translucent(p.strip, 170);
-        p.canvas = translucent(p.canvas, 24);
-        p.card = translucent(p.card, 180);
-        p.content = translucent(p.content, 180);
+        p.strip = Color32::TRANSPARENT;
+        p.canvas = Color32::TRANSPARENT;
     }
     p
 }
