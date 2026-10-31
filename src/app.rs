@@ -920,16 +920,20 @@ fn translucent(c: Color32, a: u8) -> Color32 {
     Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)
 }
 
-/// Cam modunda tuval/şerit yüzeylerini yarı saydam, aksi halde opak döndürür.
+/// Cam modunda yüzeyleri yarı saydam, aksi halde opak döndürür.
 ///
-/// Alfa değerleri buzlu camın ne kadar görüneceğini belirler: tuval (kartların
-/// arasındaki oluklar) neredeyse tamamen saydamdır, sekme şeridi ise yazıyı
-/// okunur tutmak için daha doludur. İkisi de akrilik katmanın üzerine biner.
+/// Alfa değerleri buzlu camın ne kadar görüneceğini belirler. Pencerenin neredeyse
+/// tamamı kartlarla kaplı olduğundan yalnızca tuvali/şeridi saydam yapmak yetmez:
+/// kartlar da yarı saydam olmalıdır, aksi halde camı örter. Tuval (kartlar arası
+/// oluklar) neredeyse tamamen saydamdır; sekme şeridi ve kartlar okunurluk için
+/// daha doludur. Hepsi akrilik katmanın üzerine biner.
 fn pal(dark: bool) -> Pal {
     let mut p = pal_solid(dark);
     if glass() {
-        p.strip = translucent(p.strip, 150);
-        p.canvas = translucent(p.canvas, 32);
+        p.strip = translucent(p.strip, 170);
+        p.canvas = translucent(p.canvas, 24);
+        p.card = translucent(p.card, 180);
+        p.content = translucent(p.content, 180);
     }
     p
 }
