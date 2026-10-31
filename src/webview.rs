@@ -35,8 +35,6 @@ pub struct Want {
     pub path: PathBuf,
     pub kind: MediaKind,
     pub rect: egui::Rect,
-    /// İstek Hızlı Önizleme katmanından mı geldi? (yan panel görüntüleyicisi gizlenir)
-    pub overlay: bool,
     /// Oynatıcı sayfasının teması (uygulamanın temasıyla aynı olsun).
     pub dark: bool,
     /// Vurgu rengi `#RRGGBB`.

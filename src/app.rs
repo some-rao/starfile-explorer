@@ -1,5 +1,6 @@
-//! Arayüz: Windows 11 Dosya Gezgini düzeni — sekmeler, gezinme çubuğu, komut çubuğu,
-//! gezinti bölmesi (ağaç), Giriş sayfası, ayrıntılar/simge görünümleri, ayrıntılar bölmesi.
+//! Arayüz: Windows 11 Dosya Gezgini düzeni — sekmeler, araç çubuğu kartı,
+//! gezinti bölmesi (ağaç), Giriş sayfası, ayrıntılar/simge görünümleri,
+//! Hızlı Önizleme katmanı ve komut paleti.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -64,8 +65,6 @@ struct Config {
     tabs: Vec<PathBuf>,
     active: usize,
     show_hidden: bool,
-    /// Sağ yan bölme: 0 kapalı, 1 önizleme, 2 ayrıntılar (aynı anda yalnızca biri)
-    pane: u8,
     show_ext: bool,
     sort: SortKey,
     asc: bool,
@@ -103,7 +102,6 @@ impl Default for Config {
             tabs: vec![],
             active: 0,
             show_hidden: false,
-            pane: 1,
             show_ext: true,
             sort: SortKey::Name,
             asc: true,
@@ -424,9 +422,6 @@ enum Action {
         shift: bool,
     },
     Undo,
-    // Komut çubuğu Görünüm menüsü (Node menü makinesiyle çalışır)
-    TogglePreview,
-    ToggleDetails,
     // Boşluk ile PowerToys Peek önizleme
     Peek,
     ToggleHidden,
@@ -527,20 +522,12 @@ impl QuickLook {
     }
 }
 
-/// Önizlemenin çizildiği yüzey: yan panel daha dar, Hızlı Önizleme katmanı daha geniş.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum PvSurface {
-    Panel,
-    Overlay,
-}
-
 pub struct App {
     tabs: Vec<Tab>,
     active: usize,
     sort: SortKey,
     asc: bool,
     show_hidden: bool,
-    pane: u8,
     show_ext: bool,
     view_level: usize,
     theme: u8,
@@ -617,7 +604,6 @@ pub struct App {
     type_buf: String,
     type_time: Instant,
     toasts: Vec<(String, Instant, bool)>,
-    preview: Preview,
     /// Önizlemede seçili klasörün içeriği (arka planda okunur)
     peek: HashMap<PathBuf, Arc<[Entry]>>,
     peek_pending: std::collections::HashSet<PathBuf>,
@@ -1864,7 +1850,6 @@ impl App {
             sort: cfg.sort,
             asc: cfg.asc,
             show_hidden: cfg.show_hidden,
-            pane: cfg.pane.min(2),
             show_ext: cfg.show_ext,
             view_level: cfg.view_level.min(VIEW_LEVELS.len() - 1),
             theme: cfg.theme,
@@ -1915,10 +1900,6 @@ impl App {
             type_buf: String::new(),
             type_time: Instant::now(),
             toasts: vec![],
-            preview: Preview {
-                path: None,
-                data: Arc::new(Mutex::new(None)),
-            },
             peek: HashMap::new(),
             peek_pending: Default::default(),
             peek_tx: peek_tx.clone(),
@@ -1992,7 +1973,6 @@ impl App {
             tabs: self.tabs.iter().map(|t| t.path.clone()).collect(),
             active: self.active,
             show_hidden: self.show_hidden,
-            pane: self.pane,
             show_ext: self.show_ext,
             sort: self.sort,
             asc: self.asc,
@@ -2595,12 +2575,6 @@ impl App {
             }
             if shortcut(i, Modifiers::ALT, Key::ArrowUp) {
                 actions.push(Action::Up);
-            }
-            if shortcut(i, Modifiers::ALT, Key::P) || shortcut(i, Modifiers::CTRL, Key::P) {
-                self.pane = if self.pane == 1 { 0 } else { 1 };
-            }
-            if shortcut(i, Modifiers::ALT | Modifiers::SHIFT, Key::P) {
-                self.pane = if self.pane == 2 { 0 } else { 2 };
             }
             if shortcut(i, Modifiers::CTRL, Key::H) {
                 self.show_hidden = !self.show_hidden;
@@ -3298,8 +3272,6 @@ impl App {
                 self.tab().scroll_to_cursor = true;
                 self.remember_view();
             }
-            Action::TogglePreview => self.pane = if self.pane == 1 { 0 } else { 1 },
-            Action::ToggleDetails => self.pane = if self.pane == 2 { 0 } else { 2 },
             Action::ToggleHidden => {
                 self.show_hidden = !self.show_hidden;
                 self.subdirs.clear();
@@ -5415,27 +5387,6 @@ impl App {
                     .checked(self.view_level == lvl),
             );
         }
-        // Önizleme bölmesi
-        let (label, sc) = menu::parts("Önizleme bölmesi (Alt+P)");
-        let id = acts.len() as u32;
-        acts.push(Action::TogglePreview);
-        let mut prow = Node::new(label).with_cmd(Cmd::App(id));
-        if let Some(s) = sc {
-            prow = prow.shortcut(&s);
-        }
-        prow.checked = self.pane == 1;
-        m.nodes.push(prow);
-        // Ayrıntılar bölmesi
-        let (label, sc) = menu::parts("Ayrıntılar bölmesi (Alt+Shift+P)");
-        let id = acts.len() as u32;
-        acts.push(Action::ToggleDetails);
-        let mut drow = Node::new(label).with_cmd(Cmd::App(id));
-        if let Some(s) = sc {
-            drow = drow.shortcut(&s);
-        }
-        drow.checked = self.pane == 2;
-        drow.sep = true;
-        m.nodes.push(drow);
         // Göster alt menüsü: gizlilik ve uygulama ayarları
         let mut show = Node::new(crate::i18n::t("Göster"));
         let (label, sc) = menu::parts("Gizli öğeler (Ctrl+H)");
@@ -7116,41 +7067,6 @@ impl App {
         }
     }
 
-    /// Önizleme bölmesi: yalnızca içerik (görsel küçük resim, metin önizleme)
-    fn preview_panel(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
-        let (sel, home) = {
-            let t = &self.tabs[self.active];
-            let sel: Vec<Entry> = t.selected_entries().into_iter().cloned().collect();
-            (sel, !t.lists_files() && !t.is_gallery())
-        };
-        egui::ScrollArea::vertical()
-            .id_salt("preview_scroll")
-            .auto_shrink(false)
-            .show(ui, |ui| {
-                ui.add_space(8.0);
-                if sel.len() > 1 {
-                    ui.vertical_centered(|ui| {
-                        ui.label(icon_rt("📚").size(48.0));
-                        ui.label(crate::i18n::tf("{} öğe seçildi", &[&sel.len()]));
-                    });
-                    return;
-                }
-                let Some(e) = sel.first().filter(|_| !home).cloned() else {
-                    ui.vertical_centered(|ui| {
-                        ui.label(
-                            RichText::new(crate::i18n::t("Önizlemek için bir öğe seçin.")).weak(),
-                        )
-                    });
-                    return;
-                };
-                // Veri deposu ödünç alınırken gövde `&mut self` kullanabilsin diye
-                // geçici olarak dışarı alınır, sonra geri konur.
-                let mut store = std::mem::take(&mut self.preview);
-                self.preview_body(ui, &e, &mut store, PvSurface::Panel, actions);
-                self.preview = store;
-            });
-    }
-
     /// Boşluk: seçili öğeyi (dosya ya da klasör) yerleşik katmanda önizle.
     fn open_quick_look(&mut self) {
         let Some(entry) = self.tab().selected_entries().into_iter().next().cloned() else {
@@ -7332,13 +7248,7 @@ impl App {
                                 bottom: 14,
                             })
                             .show(ui, |ui| {
-                                self.preview_body(
-                                    ui,
-                                    &ql.entry,
-                                    &mut ql.store,
-                                    PvSurface::Overlay,
-                                    actions,
-                                );
+                                self.preview_body(ui, &ql.entry, &mut ql.store);
                             });
                     });
             });
@@ -7349,36 +7259,21 @@ impl App {
         }
     }
 
-    /// Yan panel ile Hızlı Önizleme katmanının ortak gövdesi.
+    /// Hızlı Önizleme katmanının gövdesi.
     ///
     /// Klasörler için başlık, öğe sayıları ve içerik listesi; PDF/video/ses/HTML
     /// için gömülü görüntüleyici; Markdown ve düz metin için biçimlendirilmiş
     /// metin; zip/ofis/kurulum gibi ikili dosyalar için meta veri dökümü
     /// gösterilir.
-    fn preview_body(
-        &mut self,
-        ui: &mut egui::Ui,
-        e: &Entry,
-        store: &mut Preview,
-        surf: PvSurface,
-        actions: &mut Vec<Action>,
-    ) {
+    fn preview_body(&mut self, ui: &mut egui::Ui, e: &Entry, store: &mut Preview) {
         let ctx = ui.ctx().clone();
-        let weak = ui.visuals().weak_text_color();
         let sid = ui.id().with("pv");
-        // Sanal konumlarda ham CLSID yerine görünen ad (Galeri, Giriş…)
-        let title = if crate::tab::is_virtual(&e.path) {
-            self.loc_name(&e.path)
-        } else {
-            e.name.clone()
-        };
         let type_name = type_name_cached(&mut self.type_names, e);
         let media = if e.is_dir {
             None
         } else {
             crate::media::of_ext(&e.ext)
         };
-        let panel = surf == PvSurface::Panel;
         let thumb = !e.is_dir && fsutil::has_thumbnail(&e.ext);
         // Gömülü görüntüleyici (PDF/ses/video/HTML) hazır olduğunda büyük küçük
         // resim gösterilmez; hazırlanırken yer tutucu olarak gösterilir. HTML
@@ -7391,48 +7286,7 @@ impl App {
             max: Pos2 { x: 1.0, y: 1.0 },
         };
 
-        if panel {
-            let px = icon_px(&ctx, 200.0);
-            let key = if thumb {
-                format!("t{px}:{}", e.path.display())
-            } else {
-                icon_key(&e.path, e.is_dir, &e.ext, px, e.plain_dir)
-            };
-            ui.vertical_centered(|ui| {
-                if hero {
-                    let (rect, _) = ui.allocate_exact_size(
-                        egui::vec2(ui.available_width().min(280.0), 200.0),
-                        Sense::hover(),
-                    );
-                    if let Img::Ready(tex) = self.images.get(&key, &e.path, px, !thumb) {
-                        let r = fit_rect(tex.size_vec2(), rect);
-                        ui.painter().image(tex.id(), r, UV, Color32::WHITE);
-                    }
-                }
-                ui.add_space(6.0);
-                // Explorer dosya adını kalın çizmez.
-                ui.add(egui::Label::new(RichText::new(title).size(17.0)).wrap());
-                let sub = if e.is_dir {
-                    type_name.clone()
-                } else {
-                    format!("{} · {}", type_name, fsutil::format_size(e.size))
-                };
-                ui.add(
-                    egui::Label::new(RichText::new(sub).size(text_size(12.0)).color(weak)).wrap(),
-                );
-            });
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.add_space(2.0);
-                if ui.button(crate::i18n::t("Aç")).clicked() {
-                    actions.push(Action::OpenEntry(e.path.clone(), e.is_dir));
-                }
-                if !e.is_dir && ui.button(crate::i18n::t("Birlikte aç…")).clicked() {
-                    actions.push(Action::OpenWith(e.path.clone()));
-                }
-            });
-            ui.add_space(4.0);
-        } else if hero && thumb {
+        if hero && thumb {
             // Hızlı Önizleme: başlık pencerenin kendi çubuğunda. Görsel/PDF
             // küçük resmi alanı kaplar; altına dosya ayrıntısı eklenmez.
             let px = icon_px(&ctx, 640.0);
@@ -7447,23 +7301,20 @@ impl App {
         }
 
         if e.is_dir {
-            self.folder_preview(ui, e, surf);
+            self.folder_preview(ui, e);
             return;
         }
         if let Some(k) = media {
             // HTML: gömülü tarayıcı kullanılamıyorsa ham kaynak metnine düşülür
             // (aşağıdaki metin yolu); diğer türlerde meta veri kartı yeterli.
             if k != crate::media::MediaKind::Html || !self.web.failed() {
-                self.media_preview(ui, e, k, surf);
+                self.media_preview(ui, e, k);
                 return;
             }
         }
-        // Küçük resmi olan görseller: panelde büyük görselin altına meta veri,
-        // Hızlı Önizleme'de yalnızca görsel (ayrıntı kartı istenmiyor).
+        // Küçük resmi olan görseller: Hızlı Önizleme'de yalnızca görsel
+        // (ayrıntı kartı istenmiyor).
         if thumb {
-            if panel {
-                metadata_block(ui, e, &type_name, &sid);
-            }
             return;
         }
         if e.size == 0 {
@@ -7481,11 +7332,7 @@ impl App {
                 } else {
                     None
                 };
-                let max_h = if panel {
-                    420.0
-                } else {
-                    (ui.available_height() - 12.0).max(240.0)
-                };
+                let max_h = (ui.available_height() - 12.0).max(240.0);
                 text_frame(ui, max_h, "text", |ui| {
                     if is_md {
                         ui.set_width(ui.available_width());
@@ -7521,40 +7368,19 @@ impl App {
     }
 
     /// PDF, video ve ses: gömülü görüntüleyici; hazır değilse küçük resim/meta veri.
-    fn media_preview(
-        &mut self,
-        ui: &mut egui::Ui,
-        e: &Entry,
-        kind: crate::media::MediaKind,
-        surf: PvSurface,
-    ) {
+    fn media_preview(&mut self, ui: &mut egui::Ui, e: &Entry, kind: crate::media::MediaKind) {
         let accent = hex_color(self.accent);
         // Oynatıcı sayfası, çevresindeki yüzeyle aynı arka planı kullanır; böylece
         // web görünümünün kenarında renk sıçraması olmaz.
-        let bgc = if surf == PvSurface::Overlay {
-            pal_of(ui).content
-        } else {
-            ui.visuals().panel_fill
-        };
-        let bg = hex_color(bgc);
+        let bg = hex_color(pal_of(ui).content);
         if self.web.ready() {
-            let h = match (surf, kind) {
-                (PvSurface::Panel, crate::media::MediaKind::Audio) => 196.0,
-                // Hızlı Önizleme'de oynatıcı pencereyi doldurur: kart ortada
-                // küçük bir ada gibi kalmasın.
-                (PvSurface::Overlay, crate::media::MediaKind::Audio) => {
-                    (ui.available_height() - 8.0).clamp(220.0, 900.0)
-                }
-                // HTML: yan panelde okunur yükseklikte kalır (alanın tamamını
-                // kaplarsa listeye yer kalmaz), Hızlı Önizleme'de pencereyi doldurur.
-                (PvSurface::Panel, crate::media::MediaKind::Html) => {
-                    (ui.available_height() - 8.0).clamp(200.0, 520.0)
-                }
-                (PvSurface::Overlay, crate::media::MediaKind::Html) => {
-                    (ui.available_height() - 8.0).max(240.0)
-                }
-                (PvSurface::Panel, _) => (ui.available_height() - 8.0).clamp(160.0, 420.0),
-                (PvSurface::Overlay, _) => (ui.available_height() - 8.0).max(200.0),
+            // Hızlı Önizleme'de oynatıcı pencereyi doldurur: kart ortada
+            // küçük bir ada gibi kalmasın.
+            let h = match kind {
+                crate::media::MediaKind::Audio => (ui.available_height() - 8.0).clamp(220.0, 900.0),
+                // HTML: Hızlı Önizleme'de pencereyi doldurur.
+                crate::media::MediaKind::Html => (ui.available_height() - 8.0).max(240.0),
+                _ => (ui.available_height() - 8.0).max(200.0),
             };
             let (rect, _) =
                 ui.allocate_exact_size(egui::vec2(ui.available_width(), h), Sense::hover());
@@ -7562,7 +7388,6 @@ impl App {
                 path: e.path.clone(),
                 kind,
                 rect,
-                overlay: surf == PvSurface::Overlay,
                 dark: ui.visuals().dark_mode,
                 accent: accent.clone(),
                 bg,
@@ -7573,13 +7398,9 @@ impl App {
         // yine gönderilir ki ortam oluşturulsun; altında meta veri gösterilir.
         let weak = ui.visuals().weak_text_color();
         let failed = self.web.failed();
-        let h = match (surf, kind) {
-            (PvSurface::Panel, crate::media::MediaKind::Audio) => 196.0,
-            (PvSurface::Overlay, crate::media::MediaKind::Audio) => {
-                (ui.available_height() - 8.0).clamp(220.0, 900.0)
-            }
-            (PvSurface::Panel, _) => 200.0,
-            (PvSurface::Overlay, _) => 260.0,
+        let h = match kind {
+            crate::media::MediaKind::Audio => (ui.available_height() - 8.0).clamp(220.0, 900.0),
+            _ => 260.0,
         };
         let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), h), Sense::hover());
         if !failed {
@@ -7587,7 +7408,6 @@ impl App {
                 path: e.path.clone(),
                 kind,
                 rect,
-                overlay: surf == PvSurface::Overlay,
                 dark: ui.visuals().dark_mode,
                 accent: accent.clone(),
                 bg,
@@ -7605,16 +7425,10 @@ impl App {
             ui.ctx()
                 .request_repaint_after(std::time::Duration::from_millis(250));
         }
-        if surf == PvSurface::Panel {
-            let sid = ui.id().with("pv");
-            let tn = type_name_cached(&mut self.type_names, e);
-            ui.add_space(6.0);
-            metadata_block(ui, e, &tn, &sid);
-        }
     }
 
     /// Klasör: başlığın altında öğe sayıları ve içerik listesi.
-    fn folder_preview(&mut self, ui: &mut egui::Ui, e: &Entry, surf: PvSurface) {
+    fn folder_preview(&mut self, ui: &mut egui::Ui, e: &Entry) {
         let ctx = ui.ctx().clone();
         let weak = ui.visuals().weak_text_color();
         let list = self.children_for(&e.path, &ctx);
@@ -7649,11 +7463,7 @@ impl App {
             }
             return;
         }
-        let max_h = if surf == PvSurface::Panel {
-            (ui.available_height() - 8.0).clamp(120.0, 360.0)
-        } else {
-            (ui.available_height() - 8.0).max(160.0)
-        };
+        let max_h = (ui.available_height() - 8.0).max(160.0);
         egui::ScrollArea::vertical()
             .id_salt(ui.id().with("folder_children"))
             .max_height(max_h)
@@ -7703,148 +7513,6 @@ impl App {
             self.peek_pending.remove(&dir);
             self.peek.insert(dir, v.into());
         }
-    }
-
-    /// Ayrıntılar bölmesi: her tür dosya ve klasörün özellikleri
-    fn details_panel(&mut self, ui: &mut egui::Ui) {
-        let (sel, em, count, home) = {
-            let t = &self.tabs[self.active];
-            let sel: Vec<Entry> = t.selected_entries().into_iter().cloned().collect();
-            (
-                sel,
-                t.path.clone(),
-                t.view.len(),
-                !t.lists_files() && !t.is_gallery(),
-            )
-        };
-        egui::ScrollArea::vertical()
-            .id_salt("details_scroll")
-            .auto_shrink(false)
-            .show(ui, |ui| {
-                ui.add_space(4.0);
-                if home {
-                    ui.vertical_centered(|ui| {
-                        ui.label(
-                            RichText::new(crate::i18n::t(
-                                "Ayrıntılarını görmek için bir öğe seçin.",
-                            ))
-                            .weak(),
-                        )
-                    });
-                    return;
-                }
-                if sel.len() > 1 {
-                    let total: u64 = sel.iter().map(|e| e.size).sum();
-                    ui.vertical_centered(|ui| {
-                        ui.label(icon_rt("📚").size(48.0));
-                        ui.label(
-                            RichText::new(crate::i18n::tf("{} öğe seçildi", &[&sel.len()]))
-                                .strong(),
-                        );
-                        ui.label(
-                            RichText::new(crate::i18n::tf(
-                                "Dosyaların toplam boyutu: {}",
-                                &[&fsutil::format_size(total)],
-                            ))
-                            .weak(),
-                        );
-                    });
-                    return;
-                }
-                let (path, entry) = match sel.first() {
-                    Some(e) => (e.path.clone(), Some(e.clone())),
-                    None => (em.clone(), None),
-                };
-                // Sanal konumlarda ham CLSID yerine görünen ad (Galeri, Giriş…)
-                let title = if crate::tab::is_virtual(&path) {
-                    self.loc_name(&path)
-                } else {
-                    path_label(&path)
-                };
-                let ctx = ui.ctx().clone();
-                let px = icon_px(&ctx, 200.0);
-                let (is_dir, ext, plain) = entry
-                    .as_ref()
-                    .map(|e| (e.is_dir, e.ext.clone(), e.plain_dir))
-                    .unwrap_or((true, String::new(), false));
-                let thumb = !is_dir && fsutil::has_thumbnail(&ext);
-                let key = if thumb {
-                    format!("t{px}:{}", path.display())
-                } else {
-                    icon_key(&path, is_dir, &ext, px, plain)
-                };
-                ui.vertical_centered(|ui| {
-                    let (rect, _) = ui.allocate_exact_size(
-                        egui::vec2(ui.available_width().min(260.0), 200.0),
-                        Sense::hover(),
-                    );
-                    if let Img::Ready(tex) = self.images.get(&key, &path, px, !thumb) {
-                        let r = fit_rect(tex.size_vec2(), rect);
-                        ui.painter().image(
-                            tex.id(),
-                            r,
-                            Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)),
-                            Color32::WHITE,
-                        );
-                    }
-                    ui.add_space(6.0);
-                    ui.add(egui::Label::new(RichText::new(title).size(17.0).strong()).wrap());
-                });
-                ui.add_space(10.0);
-                if let Some(e) = &entry {
-                    let tn = type_name_cached(&mut self.type_names, e);
-                    egui::Grid::new("dinfo")
-                        .num_columns(2)
-                        .spacing([12.0, 6.0])
-                        .show(ui, |ui| {
-                            let mut row = |k: &str, v: String| {
-                                ui.label(RichText::new(k).weak());
-                                ui.add(egui::Label::new(v).wrap());
-                                ui.end_row();
-                            };
-                            row(crate::i18n::t("Tür"), tn);
-                            if !e.is_dir {
-                                row(
-                                    crate::i18n::t("Boyut"),
-                                    crate::i18n::tf(
-                                        "{}  ({} bayt)",
-                                        &[&fsutil::format_size(e.size), &e.size],
-                                    ),
-                                );
-                            } else if let Some(s) = self.dir_sizes.lock().unwrap().get(&e.path) {
-                                row(crate::i18n::t("Boyut"), fsutil::format_size(*s));
-                            }
-                            row(
-                                crate::i18n::t("Değiştirme"),
-                                fsutil::format_time(e.modified),
-                            );
-                            if e.created.is_some() {
-                                row(crate::i18n::t("Oluşturma"), fsutil::format_time(e.created));
-                            }
-                            row(
-                                crate::i18n::t("Konum"),
-                                e.path
-                                    .parent()
-                                    .map(|p| p.display().to_string())
-                                    .unwrap_or_default(),
-                            );
-                        });
-                    if !e.is_dir {
-                        ui.add_space(8.0);
-                        if ui
-                            .add_sized(
-                                [ui.available_width(), 30.0],
-                                egui::Button::new(crate::i18n::t("Aç")),
-                            )
-                            .clicked()
-                        {
-                            let _ = open::that_detached(&e.path);
-                        }
-                    }
-                } else {
-                    ui.label(RichText::new(crate::i18n::tf("{} öğe", &[&count])).weak());
-                }
-            });
     }
 
     fn status_bar(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
@@ -8402,8 +8070,8 @@ const HELP: &[(&str, &str)] = &[
         "Adres çubuğu (Tab ile otomatik tamamla)",
     ),
     (
-        "Ctrl+E / Ctrl+F / F3",
-        "Arama kutusu — yazdıkça filtreler, Enter alt klasörlerde arar ★",
+        "Ctrl+K / Ctrl+E / Ctrl+F / F3",
+        "Komut paleti: dosya ara, komut çalıştır, yol aç ★",
     ),
     (
         "Ctrl+C / Ctrl+X / Ctrl+V",
@@ -8420,8 +8088,6 @@ const HELP: &[(&str, &str)] = &[
     ("Shift+ok / Ctrl+Boşluk", "Aralık seç / tek tek seç"),
     ("Harf yazmak", "O harfle başlayan öğeye atla"),
     ("Alt+Enter", "Özellikler"),
-    ("Alt+P", "Önizleme bölmesi"),
-    ("Alt+Shift+P", "Ayrıntılar bölmesi"),
     ("Boşluk", "Peek ile önizleme (PowerToys)"),
     ("Ctrl+Shift+1…6", "Çok büyük … ayrıntılar görünümü"),
     ("Ctrl+fare tekerleği", "Simge boyutunu değiştir"),
@@ -8766,20 +8432,6 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 self.sidebar_card(ui, &mut actions);
             });
-        if self.pane != 0 {
-            egui::SidePanel::right("sidepane")
-                .resizable(true)
-                .default_width(320.0)
-                .width_range(220.0..=900.0)
-                .frame(egui::Frame::new().fill(pl.content).inner_margin(12))
-                .show(ctx, |ui| {
-                    if self.pane == 1 {
-                        self.preview_panel(ui, &mut actions);
-                    } else {
-                        self.details_panel(ui);
-                    }
-                });
-        }
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
@@ -8835,12 +8487,12 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.last_title = title;
         }
-        // Gömülü PDF/ses/video görüntüleyicisi: istek hangi yüzeyden geldiyse yalnızca
-        // o gösterilir (Hızlı Önizleme açıkken yan panelinki gizlenir). Menü/dialog
-        // açıkken de gizlenir; alt pencere egui içeriğinin üstünde kalır.
+        // Gömülü PDF/ses/video görüntüleyicisi yalnızca Hızlı Önizleme katmanında
+        // görünür. Menü/dialog açıkken de gizlenir; alt pencere egui içeriğinin
+        // üstünde kalır.
         let want = match (self.quick.is_some(), self.web_want.as_ref()) {
-            (true, Some(w)) => w.overlay.then(|| w.clone()),
-            (_, w) => w.cloned(),
+            (true, Some(w)) => Some(w.clone()),
+            _ => None,
         };
         let allow = matches!(self.dialog, Dialog::None)
             && self.menu.is_none()

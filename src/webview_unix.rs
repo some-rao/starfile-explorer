@@ -8,7 +8,6 @@ pub struct Want {
     pub path: std::path::PathBuf,
     pub kind: crate::media::MediaKind,
     pub rect: egui::Rect,
-    pub overlay: bool,
     pub dark: bool,
     pub accent: String,
     /// Oynatıcı sayfasının arka plan rengi (Windows tarafıyla aynı alan).
