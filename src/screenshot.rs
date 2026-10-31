@@ -5,7 +5,8 @@
 //! `SWIFT_EXPLORER_SCREENSHOT_SIZE=1280x800` pencere boyutunu,
 //! `SWIFT_EXPLORER_SCREENSHOT_DELAY=4` beklenecek saniyeyi belirler.
 //! `SWIFT_EXPLORER_SCREENSHOT_INPUT=click:820,130;key:F1` görüntüden önce sırayla tıklar ve tuşa basar
-//! (bir menüyü ya da pencereyi açık göstermek için).
+//! (bir menüyü ya da pencereyi açık göstermek için). Modifier chords are written as
+//! `ctrl+key:K` / `shift+key:Tab`, and `type:report` injects typed text.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -98,7 +99,12 @@ pub fn input_hook(raw: &mut egui::RawInput) {
             pressed: false,
             modifiers,
         });
-    } else if let Some(key) = action.strip_prefix("key:").and_then(egui::Key::from_name) {
+    } else if let Some(text) = action.strip_prefix("type:") {
+        raw.events.push(egui::Event::Text(text.to_string()));
+    } else if let Some((modifiers, key)) = parse_key_action(&action) {
+        // Chords such as `ctrl+key:K` must also set the frame's modifier state,
+        // because shortcuts read both the event and `InputState::modifiers`.
+        raw.modifiers = modifiers;
         raw.events.push(egui::Event::Key {
             key,
             physical_key: None,
@@ -111,9 +117,33 @@ pub fn input_hook(raw: &mut egui::RawInput) {
             physical_key: None,
             pressed: false,
             repeat: false,
-            modifiers,
+            modifiers: egui::Modifiers::NONE,
         });
     }
+}
+
+/// Parses `key:K`, `ctrl+key:K`, `shift+key:Tab`, `alt+key:F4` (any order of the
+/// three modifiers, separated by `+`). Returns the modifier set and the key.
+fn parse_key_action(action: &str) -> Option<(egui::Modifiers, egui::Key)> {
+    let mut modifiers = egui::Modifiers::NONE;
+    let mut rest = action;
+    loop {
+        if let Some(tail) = rest.strip_prefix("ctrl+") {
+            modifiers.ctrl = true;
+            modifiers.command = true;
+            rest = tail;
+        } else if let Some(tail) = rest.strip_prefix("shift+") {
+            modifiers.shift = true;
+            rest = tail;
+        } else if let Some(tail) = rest.strip_prefix("alt+") {
+            modifiers.alt = true;
+            rest = tail;
+        } else {
+            break;
+        }
+    }
+    let key = rest.strip_prefix("key:").and_then(egui::Key::from_name)?;
+    Some((modifiers, key))
 }
 
 /// Her karede çağrılır
