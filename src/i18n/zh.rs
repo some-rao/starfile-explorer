@@ -49,10 +49,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("İleri (Alt+Sağ ok)", "前进 (Alt+向右键)"),
     ("Üst klasör (Alt+Yukarı ok)", "上移到上一级文件夹 (Alt+向上键)"),
     ("Yenile (F5)", "刷新 (F5)"),
-    ("Sonuçlarda filtrele", "筛选结果"),
-    ("{} klasöründe ara", "在 {} 中搜索"),
     ("Temizle (Esc)", "清除 (Esc)"),
-    ("Yazdıkça bu klasörü anında filtreler.\nEnter: tüm alt klasörlerde ara.\n* ve ? joker karakterleri desteklenir (ör. *.pdf).", "输入时即时筛选此文件夹。\nEnter：搜索所有子文件夹。\n支持 * 和 ? 通配符（例如 *.pdf）。"),
     ("Tab: tamamla · Enter: git", "Tab：补全 · Enter：转到"),
     ("Yolu yazmak için tıklayın (Ctrl+L)", "单击以输入路径 (Ctrl+L)"),
     ("Alt klasör yok", "没有子文件夹"),
@@ -401,4 +398,5 @@ pub static TABLE: &[(&str, &str)] = &[
     ("↑↓ taşı   ↵ çalıştır   Esc kapat", "↑↓ 移动   ↵ 运行   Esc 关闭"),
     ("↑↓ taşı   ↵ git   Esc kapat", "↑↓ 移动   ↵ 转到   Esc 关闭"),
     ("↑↓ taşı   ↵ aç   Esc kapat", "↑↓ 移动   ↵ 打开   Esc 关闭"),
+    ("Komut paletini aç (Ctrl+K)", "打开命令面板 (Ctrl+K)"),
 ];

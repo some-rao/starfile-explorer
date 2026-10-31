@@ -49,10 +49,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("İleri (Alt+Sağ ok)", "Вперед (Alt+Стрелка вправо)"),
     ("Üst klasör (Alt+Yukarı ok)", "Вверх на один уровень (Alt+Стрелка вверх)"),
     ("Yenile (F5)", "Обновить (F5)"),
-    ("Sonuçlarda filtrele", "Фильтровать результаты"),
-    ("{} klasöründe ara", "Поиск: {}"),
     ("Temizle (Esc)", "Очистить (Esc)"),
-    ("Yazdıkça bu klasörü anında filtreler.\nEnter: tüm alt klasörlerde ara.\n* ve ? joker karakterleri desteklenir (ör. *.pdf).", "Фильтрует эту папку по мере ввода.\nEnter: искать во всех вложенных папках.\nПоддерживаются подстановочные знаки * и ? (например, *.pdf)."),
     ("Tab: tamamla · Enter: git", "Tab: дополнить · Enter: перейти"),
     ("Yolu yazmak için tıklayın (Ctrl+L)", "Щелкните, чтобы ввести путь (Ctrl+L)"),
     ("Alt klasör yok", "Нет вложенных папок"),
@@ -401,4 +398,5 @@ pub static TABLE: &[(&str, &str)] = &[
     ("↑↓ taşı   ↵ çalıştır   Esc kapat", "↑↓ перемещение   ↵ выполнить   Esc закрыть"),
     ("↑↓ taşı   ↵ git   Esc kapat", "↑↓ перемещение   ↵ перейти   Esc закрыть"),
     ("↑↓ taşı   ↵ aç   Esc kapat", "↑↓ перемещение   ↵ открыть   Esc закрыть"),
+    ("Komut paletini aç (Ctrl+K)", "Открыть палитру команд (Ctrl+K)"),
 ];

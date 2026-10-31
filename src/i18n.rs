@@ -251,10 +251,7 @@ static TABLE: &[(&str, &str)] = &[
     ("İleri (Alt+Sağ ok)", "Forward (Alt+Right Arrow)"),
     ("Üst klasör (Alt+Yukarı ok)", "Up to parent folder (Alt+Up Arrow)"),
     ("Yenile (F5)", "Refresh (F5)"),
-    ("Sonuçlarda filtrele", "Filter results"),
-    ("{} klasöründe ara", "Search {}"),
     ("Temizle (Esc)", "Clear (Esc)"),
-    ("Yazdıkça bu klasörü anında filtreler.\nEnter: tüm alt klasörlerde ara.\n* ve ? joker karakterleri desteklenir (ör. *.pdf).", "Filters this folder as you type.\nEnter: search all subfolders.\n* and ? wildcards are supported (e.g. *.pdf)."),
     ("Tab: tamamla · Enter: git", "Tab: complete · Enter: go"),
     ("Yolu yazmak için tıklayın (Ctrl+L)", "Click to type a path (Ctrl+L)"),
     ("Alt klasör yok", "No subfolders"),
@@ -604,6 +601,7 @@ static TABLE: &[(&str, &str)] = &[
     ("↑↓ taşı   ↵ çalıştır   Esc kapat", "↑↓ move   ↵ run   Esc close"),
     ("↑↓ taşı   ↵ git   Esc kapat", "↑↓ move   ↵ go   Esc close"),
     ("↑↓ taşı   ↵ aç   Esc kapat", "↑↓ move   ↵ open   Esc close"),
+    ("Komut paletini aç (Ctrl+K)", "Open command palette (Ctrl+K)"),
 ];
 
 #[cfg(test)]

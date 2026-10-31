@@ -26,6 +26,11 @@ use crate::win::{self, DriveInfo};
 #[path = "palette.rs"]
 mod palette;
 
+/// Kart köşe yarıçapı — palet, menü ve hızlı önizleme ile aynı dil
+pub(crate) const R_CARD: f32 = 10.0;
+/// İç denetimler: düğmeler, alanlar, seçili satırlar
+pub(crate) const R_CTRL: f32 = 6.0;
+
 /// Görünüm seviyeleri: 0 = Ayrıntılar, diğerleri simge boyutu (mantıksal piksel)
 const VIEW_LEVELS: [(u32, &str); 5] = [
     (0, "Ayrıntılar"),
@@ -609,7 +614,6 @@ pub struct App {
     dialog: Dialog,
     address_edit: Option<String>,
     address_focus: bool,
-    focus_search: bool,
     type_buf: String,
     type_time: Instant,
     toasts: Vec<(String, Instant, bool)>,
@@ -898,9 +902,13 @@ struct Pal {
     field_stroke: Stroke,
     /// Satırları ayıran yatay çizgiler
     line: Color32,
+    /// Uygulama arka planı: kartların durduğu tuval
+    canvas: Color32,
+    /// Kart yüzeyi: araç çubuğu, kenar çubuğu, içerik
+    card: Color32,
+    card_stroke: Stroke,
     /// Komut çubuğu, gezinti bölmesi, içerik
     content: Color32,
-    status: Color32,
     hover: Color32,
     /// Gezinti bölmesinde seçili satır
     nav_sel: Color32,
@@ -925,8 +933,20 @@ fn pal(dark: bool) -> Pal {
                 Stroke::new(1.0_f32, c.border)
             },
             line: c.border,
+            // Kart dili: tuval en koyu (koyu tema) / en açık gri (açık tema),
+            // kart yüzeyi onun üstünde durur.
+            canvas: c.crust,
+            card: if dark {
+                scheme::mix(c.base, c.surface, 0.45)
+            } else {
+                c.base
+            },
+            card_stroke: if dark {
+                Stroke::NONE
+            } else {
+                Stroke::new(1.0_f32, c.border)
+            },
             content: c.base,
-            status: c.base,
             hover: scheme::mix(c.base, c.surface, 0.7),
             nav_sel: scheme::mix(c.surface, c.border, 0.5),
             sel: scheme::mix(c.base, c.accent, sel),
@@ -943,8 +963,10 @@ fn pal(dark: bool) -> Pal {
             field: Color32::from_rgb(44, 44, 44),
             field_stroke: Stroke::NONE,
             line: Color32::from_rgb(58, 58, 58),
+            canvas: Color32::from_rgb(10, 10, 10),
+            card: Color32::from_rgb(34, 34, 34),
+            card_stroke: Stroke::NONE,
             content: Color32::from_rgb(25, 25, 25),
-            status: Color32::from_rgb(28, 28, 28),
             hover: Color32::from_rgb(45, 45, 45),
             nav_sel: Color32::from_rgb(51, 51, 51),
             sel: Color32::from_rgb(65, 65, 65),
@@ -960,8 +982,10 @@ fn pal(dark: bool) -> Pal {
             field: Color32::from_rgb(255, 255, 255),
             field_stroke: Stroke::new(1.0_f32, Color32::from_rgb(229, 229, 229)),
             line: Color32::from_rgb(229, 229, 229),
+            canvas: Color32::from_rgb(232, 232, 232),
+            card: Color32::from_rgb(255, 255, 255),
+            card_stroke: Stroke::new(1.0_f32, Color32::from_rgb(229, 229, 229)),
             content: Color32::from_rgb(255, 255, 255),
-            status: Color32::from_rgb(255, 255, 255),
             hover: Color32::from_rgb(240, 240, 240),
             nav_sel: Color32::from_rgb(234, 234, 234),
             sel: Color32::from_rgb(204, 232, 255),
@@ -1311,19 +1335,16 @@ fn caption_button(ui: &mut egui::Ui, kind: Caption) -> egui::Response {
 pub(crate) mod g {
     pub const BACK: &str = "\u{E72B}";
     pub const FORWARD: &str = "\u{E72A}";
-    pub const UP: &str = "\u{E74A}";
     pub const REFRESH: &str = "\u{E72C}";
     pub const CHEVRON_RIGHT: &str = "\u{E76C}";
     pub const CHEVRON_DOWN: &str = "\u{E70D}";
     pub const PC: &str = "\u{E7F4}";
     pub const SEARCH: &str = "\u{E721}";
-    pub const SCOPE: &str = "\u{E71C}";
     pub const NEW: &str = "\u{ECC8}";
     pub const CUT: &str = "\u{E8C6}";
     pub const COPY: &str = "\u{E8C8}";
     pub const PASTE: &str = "\u{E77F}";
     pub const RENAME: &str = "\u{E8AC}";
-    pub const LINK: &str = "\u{E71B}";
     pub const DELETE: &str = "\u{E74D}";
     pub const SORT: &str = "\u{E8CB}";
     pub const LIST: &str = "\u{E8FD}";
@@ -1332,7 +1353,6 @@ pub(crate) mod g {
     pub const PANE: &str = "\u{E89F}";
     pub const PIN: &str = "\u{E718}";
     pub const ADD: &str = "\u{E710}";
-    pub const CANCEL: &str = "\u{E711}";
     pub const MIN: &str = "\u{E921}";
     pub const MAX: &str = "\u{E922}";
     pub const RESTORE: &str = "\u{E923}";
@@ -1356,19 +1376,16 @@ pub(crate) mod g {
 pub(crate) mod g {
     pub const BACK: &str = "\u{F15B}";
     pub const FORWARD: &str = "\u{F181}";
-    pub const UP: &str = "\u{F19B}";
     pub const REFRESH: &str = "\u{F13D}";
     pub const CHEVRON_RIGHT: &str = "\u{F2AF}";
     pub const CHEVRON_DOWN: &str = "\u{F2A2}";
     pub const PC: &str = "\u{F359}";
     pub const SEARCH: &str = "\u{F68F}";
-    pub const SCOPE: &str = "\u{F0B0}";
     pub const NEW: &str = "\u{F10C}";
     pub const CUT: &str = "\u{F33A}";
     pub const COPY: &str = "\u{F32B}";
     pub const PASTE: &str = "\u{F2D5}";
     pub const RENAME: &str = "\u{F669}";
-    pub const LINK: &str = "\u{F4E4}";
     pub const DELETE: &str = "\u{F34C}";
     pub const SORT: &str = "\u{F18A}";
     pub const LIST: &str = "\u{ECD9}";
@@ -1377,7 +1394,6 @@ pub(crate) mod g {
     pub const PANE: &str = "\u{E8BD}";
     pub const PIN: &str = "\u{F601}";
     pub const ADD: &str = "\u{F109}";
-    pub const CANCEL: &str = "\u{F369}";
     pub const MIN: &str = "\u{EBD0}";
     pub const MAX: &str = "\u{E7EB}";
     pub const RESTORE: &str = "\u{EB96}";
@@ -1432,7 +1448,7 @@ fn flat_icon(
         } else {
             p.hover
         };
-        ui.painter().rect_filled(rect, 4.0, bg);
+        ui.painter().rect_filled(rect, R_CTRL, bg);
     }
     ui.painter().text(
         rect.center(),
@@ -1896,7 +1912,6 @@ impl App {
             dialog: Dialog::None,
             address_edit: None,
             address_focus: false,
-            focus_search: false,
             type_buf: String::new(),
             type_time: Instant::now(),
             toasts: vec![],
@@ -2544,13 +2559,12 @@ impl App {
                     Some(self.tabs[self.active].path.to_string_lossy().into_owned());
                 self.address_focus = true;
             }
-            if shortcut(i, Modifiers::CTRL, Key::F)
+            // Arama kutusu kalktı; arama ve komutlar paletten gelir.
+            if shortcut(i, Modifiers::CTRL, Key::K)
+                || shortcut(i, Modifiers::CTRL, Key::F)
                 || shortcut(i, Modifiers::CTRL, Key::E)
                 || shortcut(i, Modifiers::NONE, Key::F3)
             {
-                self.focus_search = true;
-            }
-            if shortcut(i, Modifiers::CTRL, Key::K) {
                 actions.push(Action::TogglePalette);
             }
             if shortcut(i, Modifiers::CTRL | Modifiers::SHIFT, Key::Tab) {
@@ -3704,132 +3718,391 @@ impl App {
         });
     }
 
-    fn nav_bar(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+    /// Araç çubuğu kartı: gezinme düğmeleri, komut menüleri, yol çubuğu ve palet açıcı.
+    ///
+    /// Tek satır: [geri][ileri][yenile] │ [Yeni][Görünüm][Sırala][Bölünmüş][Daha fazla] │ [yol] [Ctrl+K]
+    fn toolbar(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         let p = pal_of(ui);
-        ui.horizontal(|ui| {
-            ui.set_min_height(32.0);
-            ui.spacing_mut().item_spacing.x = 8.0;
+        let dark = ui.visuals().dark_mode;
+        egui::Frame::new()
+            .fill(p.card)
+            .stroke(p.card_stroke)
+            .corner_radius(R_CARD)
+            .shadow(egui::epaint::Shadow {
+                offset: [0, 2],
+                blur: 14,
+                spread: 0,
+                color: Color32::from_black_alpha(if dark { 64 } else { 16 }),
+            })
+            .inner_margin(egui::Margin {
+                left: 8,
+                right: 8,
+                top: 5,
+                bottom: 5,
+            })
+            .show(ui, |ui| {
+                self.toolbar_row(ui, actions);
+            });
+    }
+
+    /// Araç çubuğunun tek satırı: düğmeler, menüler, yol çubuğu, palet açıcı.
+    fn toolbar_row(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        let p = pal_of(ui);
+        let (home, can_back, can_fwd, has_sel, cur, split_on) = {
             let t = &self.tabs[self.active];
-            let (can_back, can_fwd, can_up) = (!t.back.is_empty(), !t.forward.is_empty(), !t.path.as_os_str().is_empty());
-            let size = egui::vec2(40.0, 32.0);
-            if flat_icon(ui, g::BACK, size, 16.0, can_back).on_hover_text(crate::i18n::t("Geri (Alt+Sol ok)")).clicked() {
+            (
+                t.is_home(),
+                !t.back.is_empty(),
+                !t.forward.is_empty(),
+                !t.selected_entries().is_empty(),
+                t.path.clone(),
+                self.split,
+            )
+        };
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 3.0;
+            ui.spacing_mut().button_padding = egui::vec2(9.0, 5.0);
+            // Komut düğmeleri düz durur; üzerine gelince yuvarlak bir leke alır.
+            {
+                let style = ui.style_mut();
+                let w = &mut style.visuals.widgets;
+                for wv in [
+                    &mut w.noninteractive,
+                    &mut w.inactive,
+                    &mut w.hovered,
+                    &mut w.active,
+                    &mut w.open,
+                ] {
+                    wv.bg_stroke = Stroke::NONE;
+                    wv.corner_radius = CornerRadius::same(R_CTRL as u8);
+                }
+                w.noninteractive.bg_fill = Color32::TRANSPARENT;
+                w.inactive.bg_fill = Color32::TRANSPARENT;
+                w.hovered.bg_fill = p.hover;
+                w.active.bg_fill = p.nav_sel;
+                w.open.bg_fill = p.nav_sel;
+            }
+
+            let size = egui::vec2(32.0, 30.0);
+            if flat_icon(ui, g::BACK, size, 16.0, can_back)
+                .on_hover_text(crate::i18n::t("Geri (Alt+Sol ok)"))
+                .clicked()
+            {
                 actions.push(Action::Back);
             }
-            if flat_icon(ui, g::FORWARD, size, 16.0, can_fwd).on_hover_text(crate::i18n::t("İleri (Alt+Sağ ok)")).clicked() {
+            if flat_icon(ui, g::FORWARD, size, 16.0, can_fwd)
+                .on_hover_text(crate::i18n::t("İleri (Alt+Sağ ok)"))
+                .clicked()
+            {
                 actions.push(Action::Forward);
             }
-            if flat_icon(ui, g::UP, size, 16.0, can_up).on_hover_text(crate::i18n::t("Üst klasör (Alt+Yukarı ok)")).clicked() {
-                actions.push(Action::Up);
-            }
-            if flat_icon(ui, g::REFRESH, size, 16.0, true).on_hover_text(crate::i18n::t("Yenile (F5)")).clicked() {
+            if flat_icon(ui, g::REFRESH, size, 16.0, true)
+                .on_hover_text(crate::i18n::t("Yenile (F5)"))
+                .clicked()
+            {
                 actions.push(Action::Refresh);
             }
-            ui.add_space(2.0);
+            ui.add_space(7.0);
 
-            // Explorer: arama kutusu pencere genişliğinin dörtte biri
-            let search_w = (ui.ctx().screen_rect().width() * 0.25).clamp(180.0, 480.0);
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                // Arama kutusu (Explorer'daki gibi sağda)
-                let place = {
-                    let t = &self.tabs[self.active];
-                    self.loc_name(&t.path)
-                };
-                let t = &mut self.tabs[self.active];
-                let hint = if t.search.is_some() { crate::i18n::t("Sonuçlarda filtrele").to_string() } else { crate::i18n::tf("{} klasöründe ara", &[&place]) };
-                let frame = egui::Frame::new().fill(p.field).stroke(p.field_stroke).corner_radius(4.0).inner_margin(egui::Margin { left: 11, right: 10, top: 0, bottom: 0 });
-                let mut submit = false;
-                let mut clear = false;
-                frame.show(ui, |ui| {
-                    ui.set_width(search_w - 21.0);
-                    ui.set_height(32.0);
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        ui.spacing_mut().item_spacing.x = 6.0;
-                        ui.label(fl(g::SEARCH, 14.0).color(p.text));
-                        if !t.filter.is_empty() && flat_icon(ui, g::CANCEL, egui::vec2(24.0, 24.0), 10.0, true).on_hover_text(crate::i18n::t("Temizle (Esc)")).clicked() {
-                            clear = true;
-                        }
-                        let hint = RichText::new(hint).color(p.weak);
-                        let resp = ui.add(egui::TextEdit::singleline(&mut t.filter).hint_text(hint).frame(false).desired_width(ui.available_width()).id(egui::Id::new("search")));
-                        if self.focus_search {
-                            resp.request_focus();
-                            self.focus_search = false;
-                        }
-                        if resp.changed() {
-                            t.view_dirty = true;
-                        }
-                        if resp.has_focus() && ui.input(|i| i.key_pressed(Key::ArrowDown)) {
-                            resp.surrender_focus();
-                        }
-                        if resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) && !t.filter.trim().is_empty() {
-                            submit = true;
-                        }
-                        if resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Escape)) {
-                            clear = true;
-                        }
-                        resp.on_hover_text(crate::i18n::t("Yazdıkça bu klasörü anında filtreler.\nEnter: tüm alt klasörlerde ara.\n* ve ? joker karakterleri desteklenir (ör. *.pdf)."));
-                    });
-                });
-                if clear {
-                    t.filter.clear();
-                    t.view_dirty = true;
-                }
-                if submit {
-                    let p = expand_path(t.filter.trim());
-                    if t.is_home() && (p.exists() || !t.is_pc()) {
-                        t.filter.clear();
-                        if p.exists() {
-                            actions.push(Action::Navigate(p));
-                        }
-                    } else if t.search.is_none() {
-                        actions.push(Action::StartSearch);
-                    }
-                }
-                // Arama kapsamı düğmesi (kutunun solunda): bu klasör / alt klasörler / bu bilgisayar
-                let (icon, tip) = match t.scope {
-                    SearchScope::Folder => (g::FOLDER, "Bu klasör"),
-                    SearchScope::Subfolders => (g::SCOPE, "Alt klasörler dahil"),
-                    SearchScope::ThisPc => (g::PC, "Bu bilgisayar"),
-                };
-                let btn = egui::Button::new(fl(icon, 14.0).color(p.weak))
-                    .frame(false)
-                    .min_size(egui::vec2(26.0, 26.0));
-                egui::menu::menu_custom_button(ui, btn, |ui| {
-                    ui.set_min_width(180.0);
-                    for (s, label) in [
-                        (SearchScope::Folder, "Bu klasör"),
-                        (SearchScope::Subfolders, "Alt klasörler dahil"),
-                        (SearchScope::ThisPc, "Bu bilgisayar"),
-                    ] {
-                        if ui
-                            .selectable_label(t.scope == s, crate::i18n::t(label))
-                            .clicked()
-                        {
-                            actions.push(Action::SetSearchScope(s));
+            // Etiketli menü düğmesi (Yeni, Görünüm, Sırala, Bölünmüş)
+            let menu_btn = |ui: &mut egui::Ui, glyph: &str, text: &str, enabled: bool| {
+                let job = glyph_job(ui, glyph, None, text, true);
+                egui::Button::new(job)
+                    .min_size(egui::vec2(0.0, 30.0))
+                    .sense(if enabled {
+                        Sense::click()
+                    } else {
+                        Sense::hover()
+                    })
+            };
+
+            // Yeni
+            {
+                let b = menu_btn(ui, g::NEW, crate::i18n::t("Yeni"), !home);
+                egui::menu::menu_custom_button(ui, b, |ui| {
+                    for (i, k) in newfile::KINDS.iter().enumerate() {
+                        let label = if i == 0 {
+                            crate::i18n::t("Klasör          Ctrl+Shift+N")
+                        } else {
+                            crate::i18n::t(k.label_key)
+                        };
+                        if ui.button(icon_label(ui, k.emoji, k.tint, label)).clicked() {
+                            actions.push(Action::New(i));
                             ui.close_menu();
                         }
                     }
-                })
-                .response
-                .on_hover_text(crate::i18n::t(tip));
-                ui.allocate_ui_with_layout(ui.available_size(), Layout::left_to_right(Align::Center), |ui| {
-                    self.address_bar(ui, actions);
                 });
-            });
+            }
+
+            // Görünüm
+            {
+                let view_glyph = if self.view_level == 0 {
+                    g::LIST
+                } else {
+                    g::TILES
+                };
+                let b = menu_btn(ui, view_glyph, crate::i18n::t("Görünüm"), true);
+                let view_resp = ui.add(b);
+                if view_resp.clicked() {
+                    if self.menu.is_some() {
+                        // Açık menüyü kapat (tekrar tıklama, sağ tık menü dahil)
+                        self.menu = None;
+                    } else {
+                        let mut acts = Vec::new();
+                        let m = self.build_view_menu(view_resp.rect.left_bottom(), &mut acts);
+                        self.menu = Some(MenuState {
+                            menu: m,
+                            actions: acts,
+                            target: MenuTarget::Background {
+                                folder: cur.clone(),
+                                in_search: false,
+                            },
+                        });
+                    }
+                }
+            }
+
+            // Sırala
+            {
+                let sort_names = [
+                    (SortKey::Name, crate::i18n::t("Ad")),
+                    (SortKey::Modified, crate::i18n::t("Değiştirme tarihi")),
+                    (SortKey::Type, crate::i18n::t("Tür")),
+                    (SortKey::Size, crate::i18n::t("Boyut")),
+                ];
+                let b = menu_btn(ui, g::SORT, crate::i18n::t("Sırala"), true);
+                egui::menu::menu_custom_button(ui, b, |ui| {
+                    for (k, n) in sort_names {
+                        if ui.radio(self.sort == k, n).clicked() {
+                            if self.sort != k {
+                                actions.push(Action::Sort(k));
+                            }
+                            ui.close_menu();
+                        }
+                    }
+                    ui.separator();
+                    if ui.radio(self.asc, crate::i18n::t("Artan")).clicked() {
+                        self.asc = true;
+                        self.remember_view();
+                        self.mark_views_dirty();
+                        ui.close_menu();
+                    }
+                    if ui.radio(!self.asc, crate::i18n::t("Azalan")).clicked() {
+                        self.asc = false;
+                        self.remember_view();
+                        self.mark_views_dirty();
+                        ui.close_menu();
+                    }
+                    ui.separator();
+                    ui.add_enabled_ui(!home, |ui| {
+                        ui.menu_button(crate::i18n::t("Grupla"), |ui| {
+                            let on = self.grouped.contains(&cur);
+                            if ui.radio(on, crate::i18n::t("Değiştirme tarihi")).clicked() {
+                                if !on {
+                                    self.grouped.push(cur.clone());
+                                }
+                                self.remember_view();
+                                self.mark_views_dirty();
+                                ui.close_menu();
+                            }
+                            if ui.radio(!on, crate::i18n::t("(Yok)")).clicked() {
+                                self.grouped.retain(|g| g != &cur);
+                                self.remember_view();
+                                self.mark_views_dirty();
+                                ui.close_menu();
+                            }
+                        });
+                    });
+                });
+            }
+
+            // Bölünmüş görünüm
+            {
+                let b = menu_btn(ui, g::PANE, crate::i18n::t("Bölünmüş görünüm"), true);
+                egui::menu::menu_custom_button(ui, b, |ui| {
+                    if ui
+                        .selectable_label(split_on, crate::i18n::t("Bölünmüş görünüm"))
+                        .clicked()
+                    {
+                        actions.push(Action::ToggleSplit);
+                        ui.close_menu();
+                    }
+                });
+            }
+
+            // Daha fazla
+            {
+                let more = egui::Button::new(fl(g::MORE, 16.0)).min_size(egui::vec2(32.0, 30.0));
+                egui::menu::menu_custom_button(ui, more, |ui| {
+                    ui.add_enabled_ui(!home, |ui| {
+                        if ui
+                            .button(crate::i18n::t("Tümünü seç            Ctrl+A"))
+                            .clicked()
+                        {
+                            actions.push(Action::SelectAll);
+                            ui.close_menu();
+                        }
+                        if ui
+                            .button(crate::i18n::t("Hiçbirini seçme        Esc"))
+                            .clicked()
+                        {
+                            actions.push(Action::SelectNone);
+                            ui.close_menu();
+                        }
+                        if ui.button(crate::i18n::t("Seçimi tersine çevir")).clicked() {
+                            actions.push(Action::InvertSelection);
+                            ui.close_menu();
+                        }
+                    });
+                    ui.separator();
+                    if ui
+                        .add_enabled(
+                            !self.undo.is_empty(),
+                            egui::Button::new(crate::i18n::t("Geri al                   Ctrl+Z")),
+                        )
+                        .clicked()
+                    {
+                        actions.push(Action::Undo);
+                        ui.close_menu();
+                    }
+                    ui.add_enabled_ui(!home, |ui| {
+                        if ui.button(crate::i18n::t("Terminalde aç")).clicked() {
+                            actions.push(Action::Terminal(cur.clone()));
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        ui.add_enabled_ui(has_sel, |ui| {
+                            let paths = self.tabs[self.active].selected_paths();
+                            if ui.button(crate::i18n::t("Şuraya kopyala…")).clicked() {
+                                actions.push(Action::PickDest {
+                                    paths: paths.clone(),
+                                    cut: false,
+                                });
+                                ui.close_menu();
+                            }
+                            if ui.button(crate::i18n::t("Şuraya taşı…")).clicked() {
+                                actions.push(Action::PickDest { paths, cut: true });
+                                ui.close_menu();
+                            }
+                        });
+                        if ui
+                            .button(crate::i18n::t("Klasör boyutlarını hesapla"))
+                            .clicked()
+                        {
+                            actions.push(Action::CalcSize);
+                            ui.close_menu();
+                        }
+                        if ui
+                            .button(crate::i18n::t("Hızlı erişime sabitle   Ctrl+D"))
+                            .clicked()
+                        {
+                            actions.push(Action::AddBookmark(cur.clone()));
+                            ui.close_menu();
+                        }
+                        let open_label = if cfg!(windows) {
+                            "Explorer'da aç"
+                        } else {
+                            "Dosya yöneticisinde aç"
+                        };
+                        if ui.button(crate::i18n::t(open_label)).clicked() {
+                            #[cfg(windows)]
+                            let _ = std::process::Command::new("explorer.exe").arg(&cur).spawn();
+                            #[cfg(not(windows))]
+                            let _ = open::that_detached(&cur);
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui
+                            .button(crate::i18n::t("Özellikler              Alt+Enter"))
+                            .clicked()
+                        {
+                            let target = self.tabs[self.active]
+                                .selected_paths()
+                                .into_iter()
+                                .next()
+                                .unwrap_or(cur.clone());
+                            actions.push(Action::Properties(target));
+                            ui.close_menu();
+                        }
+                    });
+                    if ui
+                        .button(crate::i18n::t("Klavye kısayolları      F1"))
+                        .clicked()
+                    {
+                        self.dialog = Dialog::Help;
+                        ui.close_menu();
+                    }
+                });
+            }
+
+            // Yol çubuğu: kalan alanı kaplar
+            let launcher_w = 116.0;
+            let path_w = (ui.available_width() - launcher_w - 8.0).max(140.0);
+            ui.allocate_ui_with_layout(
+                egui::vec2(path_w, 30.0),
+                Layout::left_to_right(Align::Center),
+                |ui| {
+                    self.address_bar(ui, actions);
+                },
+            );
+
+            // Palet açıcı: yazılmayan küçük alan, "Ctrl + K" ipucu
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(launcher_w, 30.0), Sense::click());
+            let tint = if resp.hovered() { p.hover } else { p.field };
+            ui.painter().rect_filled(rect, R_CTRL, tint);
+            let fg = if resp.hovered() { p.text } else { p.weak };
+            ui.painter().text(
+                Pos2::new(rect.left() + 15.0, rect.center().y),
+                Align2::LEFT_CENTER,
+                g::SEARCH,
+                fluent_font(13.0),
+                fg,
+            );
+            let galley = ui.fonts(|f| f.layout_no_wrap("Ctrl + K".to_string(), ui_font(12.0), fg));
+            ui.painter().galley(
+                Pos2::new(rect.left() + 28.0, rect.center().y - galley.size().y / 2.0),
+                galley,
+                fg,
+            );
+            if resp.clicked() {
+                actions.push(Action::TogglePalette);
+            }
+            resp.on_hover_text(crate::i18n::t("Komut paletini aç (Ctrl+K)"));
         });
 
-        // Sorgu çipleri (ext:pdf, size:>1mb, -taslak ...): tek tıkla kaldırılır
+        // Etkin arama ve sorgu çipleri (ext:pdf, size:>1mb, -taslak ...): tek tıkla kaldırılır
+        let active_query = self.tabs[self.active]
+            .search
+            .as_ref()
+            .map(|search| search.query.clone());
         let chips = Query::parse(&self.tabs[self.active].filter).chips;
-        if !chips.is_empty() {
+        if active_query.is_some() || !chips.is_empty() {
             let p = pal_of(ui);
             ui.add_space(2.0);
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 ui.add_space(6.0);
+                if let Some(query) = &active_query {
+                    let text = RichText::new(format!("🔍 {query}  ✕")).size(text_size(12.0));
+                    let btn = egui::Button::new(text)
+                        .fill(p.field)
+                        .stroke(p.field_stroke)
+                        .corner_radius(R_CTRL)
+                        .min_size(egui::vec2(0.0, 22.0));
+                    if ui
+                        .add(btn)
+                        .on_hover_text(crate::i18n::t("Temizle (Esc)"))
+                        .clicked()
+                    {
+                        actions.push(Action::ExitSearch);
+                    }
+                }
                 for (i, c) in chips.iter().enumerate() {
                     let text = RichText::new(format!("{}  ✕", c.token)).size(text_size(12.0));
                     let btn = egui::Button::new(text)
                         .fill(p.field)
                         .stroke(p.field_stroke)
+                        .corner_radius(R_CTRL)
                         .min_size(egui::vec2(0.0, 20.0));
                     if ui
                         .add(btn)
@@ -3910,7 +4183,7 @@ impl App {
         let frame = egui::Frame::new()
             .fill(p.field)
             .stroke(p.field_stroke)
-            .corner_radius(4.0)
+            .corner_radius(R_CTRL)
             .inner_margin(egui::Margin::symmetric(6, 0));
 
         if self.address_edit.is_some() {
@@ -4107,7 +4380,7 @@ impl App {
                         Sense::click(),
                     );
                     if r.hovered() {
-                        ui.painter().rect_filled(rect, 4.0, p.hover);
+                        ui.painter().rect_filled(rect, R_CTRL, p.hover);
                     }
                     ui.painter()
                         .galley(rect.center() - galley.size() / 2.0, galley, p.text);
@@ -4197,357 +4470,6 @@ impl App {
         }
     }
 
-    fn command_bar(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
-        let (home, in_search, has_sel, cur) = {
-            let t = &self.tabs[self.active];
-            (
-                t.is_home(),
-                t.search.is_some(),
-                !t.selected_entries().is_empty(),
-                t.path.clone(),
-            )
-        };
-        let can_paste = !home && !in_search;
-        let p = pal_of(ui);
-        ui.horizontal(|ui| {
-            ui.set_min_height(32.0);
-            ui.spacing_mut().item_spacing.x = 8.0;
-            ui.spacing_mut().button_padding = egui::vec2(10.0, 6.0);
-            ui.spacing_mut().interact_size.y = (32.0 * text_factor()).round();
-            let sep = |ui: &mut egui::Ui| {
-                let (r, _) = ui.allocate_exact_size(egui::vec2(1.0, 24.0), Sense::hover());
-                ui.painter()
-                    .vline(r.center().x, r.y_range(), Stroke::new(1.0_f32, p.line));
-            };
-            let tool = |ui: &mut egui::Ui, glyph: &str, enabled: bool, tip: &str| {
-                flat_icon(ui, glyph, egui::vec2(40.0, 32.0), 16.0, enabled)
-                    .on_hover_text(tip)
-                    .clicked()
-            };
-            // Metinli menü düğmesi (Yeni ⌄, Sırala ⌄, Görünüm ⌄)
-            let menu_btn =
-                |ui: &mut egui::Ui, glyph: &str, text: &str, chevron: bool, enabled: bool| {
-                    let job = glyph_job(ui, glyph, None, text, chevron);
-                    egui::Button::new(job)
-                        .frame(false)
-                        .min_size(egui::vec2(0.0, 32.0))
-                        .sense(if enabled {
-                            Sense::click()
-                        } else {
-                            Sense::hover()
-                        })
-                };
-
-            ui.add_enabled_ui(can_paste, |ui| {
-                let b = menu_btn(ui, g::NEW, crate::i18n::t("Yeni"), true, can_paste);
-                egui::menu::menu_custom_button(ui, b, |ui| {
-                    for (i, k) in newfile::KINDS.iter().enumerate() {
-                        let label = if i == 0 {
-                            crate::i18n::t("Klasör          Ctrl+Shift+N")
-                        } else {
-                            crate::i18n::t(k.label_key)
-                        };
-                        if ui.button(icon_label(ui, k.emoji, k.tint, &label)).clicked() {
-                            actions.push(Action::New(i));
-                            ui.close_menu();
-                        }
-                    }
-                });
-            });
-            sep(ui);
-            if tool(ui, g::CUT, has_sel, crate::i18n::t("Kes (Ctrl+X)")) {
-                actions.push(Action::Cut);
-            }
-            if tool(ui, g::COPY, has_sel, crate::i18n::t("Kopyala (Ctrl+C)")) {
-                actions.push(Action::Copy);
-            }
-            if tool(ui, g::PASTE, can_paste, crate::i18n::t("Yapıştır (Ctrl+V)")) {
-                actions.push(Action::Paste);
-            }
-            if tool(
-                ui,
-                g::RENAME,
-                has_sel,
-                crate::i18n::t("Yeniden adlandır (F2)"),
-            ) {
-                actions.push(Action::Rename);
-            }
-            if tool(
-                ui,
-                g::LINK,
-                !home,
-                crate::i18n::t("Yolu kopyala (Ctrl+Shift+C)"),
-            ) {
-                actions.push(Action::CopyPath);
-            }
-            if tool(
-                ui,
-                g::DELETE,
-                has_sel,
-                crate::i18n::t("Sil (Del)  ·  Kalıcı sil: Shift+Del"),
-            ) {
-                actions.push(Action::Delete { permanent: false });
-            }
-            sep(ui);
-
-            let sort_names = [
-                (SortKey::Name, crate::i18n::t("Ad")),
-                (SortKey::Modified, crate::i18n::t("Değiştirme tarihi")),
-                (SortKey::Type, crate::i18n::t("Tür")),
-                (SortKey::Size, crate::i18n::t("Boyut")),
-            ];
-            let b = menu_btn(ui, g::SORT, crate::i18n::t("Sırala"), true, true);
-            egui::menu::menu_custom_button(ui, b, |ui| {
-                for (k, n) in sort_names {
-                    if ui.radio(self.sort == k, n).clicked() {
-                        if self.sort != k {
-                            actions.push(Action::Sort(k));
-                        }
-                        ui.close_menu();
-                    }
-                }
-                ui.separator();
-                if ui.radio(self.asc, crate::i18n::t("Artan")).clicked() {
-                    self.asc = true;
-                    self.remember_view();
-                    self.mark_views_dirty();
-                    ui.close_menu();
-                }
-                if ui.radio(!self.asc, crate::i18n::t("Azalan")).clicked() {
-                    self.asc = false;
-                    self.remember_view();
-                    self.mark_views_dirty();
-                    ui.close_menu();
-                }
-                ui.separator();
-                ui.add_enabled_ui(!home, |ui| {
-                    ui.menu_button(crate::i18n::t("Grupla"), |ui| {
-                        let on = self.grouped.contains(&cur);
-                        if ui.radio(on, crate::i18n::t("Değiştirme tarihi")).clicked() {
-                            if !on {
-                                self.grouped.push(cur.clone());
-                            }
-                            self.remember_view();
-                            self.mark_views_dirty();
-                            ui.close_menu();
-                        }
-                        if ui.radio(!on, crate::i18n::t("(Yok)")).clicked() {
-                            self.grouped.retain(|g| g != &cur);
-                            self.remember_view();
-                            self.mark_views_dirty();
-                            ui.close_menu();
-                        }
-                    });
-                });
-            });
-            let view_glyph = if self.view_level == 0 {
-                g::LIST
-            } else {
-                g::TILES
-            };
-            let b = menu_btn(ui, view_glyph, crate::i18n::t("Görünüm"), true, true);
-            let view_resp = ui.add(b);
-            if view_resp.clicked() {
-                if self.menu.is_some() {
-                    // Açık menüyü kapat (tekrar tıklama, sağ tık menü dahil)
-                    self.menu = None;
-                } else {
-                    let mut acts = Vec::new();
-                    let m = self.build_view_menu(view_resp.rect.left_bottom(), &mut acts);
-                    self.menu = Some(MenuState {
-                        menu: m,
-                        actions: acts,
-                        target: MenuTarget::Background {
-                            folder: cur.clone(),
-                            in_search: false,
-                        },
-                    });
-                }
-            }
-            // Bölünmüş görünüm: Sırala/Görünüm'ün hemen yanında, açıkken vurgulu.
-            // Glif yerine iki küçük panel çizilir (Fluent "split" simgesi).
-            {
-                let active = self.split;
-                let (rect, resp) = ui.allocate_exact_size(egui::vec2(40.0, 32.0), Sense::click());
-                if resp.hovered() {
-                    let bg = if resp.is_pointer_button_down_on() {
-                        p.nav_sel
-                    } else {
-                        p.hover
-                    };
-                    ui.painter().rect_filled(rect, 4.0, bg);
-                }
-                let col = if active { self.accent } else { p.text };
-                let c = rect.center();
-                let sz = egui::vec2(8.0, 15.0);
-                let left = egui::Rect::from_center_size(c - egui::vec2(5.5, 0.0), sz);
-                let right = egui::Rect::from_center_size(c + egui::vec2(5.5, 0.0), sz);
-                if active {
-                    ui.painter().rect_filled(
-                        left,
-                        2.0,
-                        Color32::from_rgba_unmultiplied(col.r(), col.g(), col.b(), 70),
-                    );
-                }
-                for r in [left, right] {
-                    ui.painter().rect_stroke(
-                        r,
-                        2.0,
-                        Stroke::new(1.25_f32, col),
-                        egui::StrokeKind::Inside,
-                    );
-                }
-                if resp
-                    .on_hover_text(crate::i18n::t("Bölünmüş görünüm"))
-                    .clicked()
-                {
-                    actions.push(Action::ToggleSplit);
-                }
-            }
-            sep(ui);
-            let more = egui::Button::new(fl(g::MORE, 16.0))
-                .frame(false)
-                .min_size(egui::vec2(40.0, 32.0));
-            egui::menu::menu_custom_button(ui, more, |ui| {
-                ui.add_enabled_ui(!home, |ui| {
-                    if ui
-                        .button(crate::i18n::t("Tümünü seç            Ctrl+A"))
-                        .clicked()
-                    {
-                        actions.push(Action::SelectAll);
-                        ui.close_menu();
-                    }
-                    if ui
-                        .button(crate::i18n::t("Hiçbirini seçme        Esc"))
-                        .clicked()
-                    {
-                        actions.push(Action::SelectNone);
-                        ui.close_menu();
-                    }
-                    if ui.button(crate::i18n::t("Seçimi tersine çevir")).clicked() {
-                        actions.push(Action::InvertSelection);
-                        ui.close_menu();
-                    }
-                });
-                ui.separator();
-                if ui
-                    .add_enabled(
-                        !self.undo.is_empty(),
-                        egui::Button::new(crate::i18n::t("Geri al                   Ctrl+Z")),
-                    )
-                    .clicked()
-                {
-                    actions.push(Action::Undo);
-                    ui.close_menu();
-                }
-                ui.add_enabled_ui(!home, |ui| {
-                    if ui.button(crate::i18n::t("Terminalde aç")).clicked() {
-                        actions.push(Action::Terminal(cur.clone()));
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    ui.add_enabled_ui(has_sel, |ui| {
-                        let paths = self.tabs[self.active].selected_paths();
-                        if ui.button(crate::i18n::t("Şuraya kopyala…")).clicked() {
-                            actions.push(Action::PickDest {
-                                paths: paths.clone(),
-                                cut: false,
-                            });
-                            ui.close_menu();
-                        }
-                        if ui.button(crate::i18n::t("Şuraya taşı…")).clicked() {
-                            actions.push(Action::PickDest { paths, cut: true });
-                            ui.close_menu();
-                        }
-                    });
-                    if ui
-                        .button(crate::i18n::t("Klasör boyutlarını hesapla"))
-                        .clicked()
-                    {
-                        actions.push(Action::CalcSize);
-                        ui.close_menu();
-                    }
-                    if ui
-                        .button(crate::i18n::t("Hızlı erişime sabitle   Ctrl+D"))
-                        .clicked()
-                    {
-                        actions.push(Action::AddBookmark(cur.clone()));
-                        ui.close_menu();
-                    }
-                    let open_label = if cfg!(windows) {
-                        "Explorer'da aç"
-                    } else {
-                        "Dosya yöneticisinde aç"
-                    };
-                    if ui.button(crate::i18n::t(open_label)).clicked() {
-                        #[cfg(windows)]
-                        let _ = std::process::Command::new("explorer.exe").arg(&cur).spawn();
-                        #[cfg(not(windows))]
-                        let _ = open::that_detached(&cur);
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    if ui
-                        .button(crate::i18n::t("Özellikler              Alt+Enter"))
-                        .clicked()
-                    {
-                        let target = self.tabs[self.active]
-                            .selected_paths()
-                            .into_iter()
-                            .next()
-                            .unwrap_or(cur.clone());
-                        actions.push(Action::Properties(target));
-                        ui.close_menu();
-                    }
-                });
-                if ui
-                    .button(crate::i18n::t("Klavye kısayolları      F1"))
-                    .clicked()
-                {
-                    self.dialog = Dialog::Help;
-                    ui.close_menu();
-                }
-            });
-
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                // Ayrıntılar bölmesi (sağ yan bölme)
-                let mut b = menu_btn(ui, g::PANE, crate::i18n::t("Ayrıntılar"), false, true);
-                if self.pane == 2 {
-                    b = b.fill(p.nav_sel);
-                }
-                let details = ui.add(b);
-                if details
-                    .on_hover_text(crate::i18n::t("Ayrıntılar bölmesi"))
-                    .clicked()
-                {
-                    self.pane = if self.pane == 2 { 0 } else { 2 };
-                }
-                // Önizleme bölmesi
-                let mut b = menu_btn(ui, g::VIEW, crate::i18n::t("Önizleme"), false, true);
-                if self.pane == 1 {
-                    b = b.fill(p.nav_sel);
-                }
-                let prev = ui.add(b);
-                if prev
-                    .on_hover_text(crate::i18n::t("Önizleme bölmesi"))
-                    .clicked()
-                {
-                    self.pane = if self.pane == 1 { 0 } else { 1 };
-                }
-                if in_search {
-                    sep(ui);
-                    let b = menu_btn(ui, g::CANCEL, crate::i18n::t("Aramayı kapat"), false, true);
-                    if ui.add(b).clicked() {
-                        actions.push(Action::ExitSearch);
-                    }
-                }
-            });
-        });
-    }
-
-    /// Gezinti bölmesi satırı (Explorer ölçüleri: 24 px yükseklik; açma oku, ikon, ad, sağda iğne).
-    /// Dönüş: (satır yanıtı, ok tıklandı mı)
-    #[allow(clippy::too_many_arguments)]
     fn nav_row(
         &mut self,
         ui: &mut egui::Ui,
@@ -4674,6 +4596,44 @@ impl App {
                 let l = path_label(c);
                 self.tree_node(ui, depth + 1, c, &l, actions);
             }
+        }
+    }
+
+    /// Kart yüzeyi: yuvarlatılmış, temaya göre kenarlıklı yüzey.
+    fn card_surface(ui: &egui::Ui, rect: Rect) {
+        let p = pal_of(ui);
+        ui.painter().rect_filled(rect, R_CARD, p.card);
+        if !ui.visuals().dark_mode {
+            ui.painter()
+                .rect_stroke(rect, R_CARD, p.card_stroke, egui::StrokeKind::Inside);
+        }
+    }
+
+    /// Kenar çubuğu kartı: hızlı erişim ve klasör ağacı yuvarlatılmış bir yüzeyde.
+    fn sidebar_card(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        let rect = ui.available_rect_before_wrap();
+        Self::card_surface(ui, rect);
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(rect.shrink(4.0))
+                .layout(egui::Layout::top_down(egui::Align::Min)),
+        );
+        self.sidebar(&mut child, actions);
+    }
+
+    /// İçerik kartı: dosya listesi (veya ana sayfa) yuvarlatılmış bir yüzeyde.
+    fn content_card(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
+        let rect = ui.available_rect_before_wrap();
+        Self::card_surface(ui, rect);
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(rect.shrink(4.0))
+                .layout(egui::Layout::top_down(egui::Align::Min)),
+        );
+        if self.split {
+            self.split_area(&mut child, actions);
+        } else {
+            self.pane_body(&mut child, actions);
         }
     }
 
@@ -8738,16 +8698,8 @@ impl eframe::App for App {
 
         self.handle_keys(ctx, &mut actions);
 
-        // Explorer düzeni: sekme şeridi, gezinme satırı, komut çubuğu (aralarında ince çizgiler),
-        // solda gezinti bölmesi, altta durum çubuğu
+        // Düzen: sekme şeridi, araç çubuğu kartı, solda gezinti bölmesi, altta durum çubuğu
         let pl = pal(ctx.style().visuals.dark_mode);
-        let hline = |ctx: &egui::Context, rect: Rect| {
-            ctx.layer_painter(egui::LayerId::background()).hline(
-                rect.x_range(),
-                rect.bottom() - 0.5,
-                Stroke::new(1.0_f32, pl.line),
-            );
-        };
         egui::TopBottomPanel::top("tabs")
             .exact_height(title_h())
             .frame(
@@ -8764,39 +8716,27 @@ impl eframe::App for App {
             .show(ctx, |ui| {
                 self.tab_bar(ui, &mut actions);
             });
-        let r = egui::TopBottomPanel::top("nav")
-            .frame(egui::Frame::new().fill(pl.nav).inner_margin(egui::Margin {
-                left: 8,
-                right: 12,
-                top: 8,
-                bottom: 8,
-            }))
-            .show_separator_line(false)
-            .show(ctx, |ui| {
-                self.nav_bar(ui, &mut actions);
-            });
-        hline(ctx, r.response.rect);
-        let r = egui::TopBottomPanel::top("cmd")
+        // Araç çubuğu kartı: tuval üzerinde yüzen tek satır.
+        egui::TopBottomPanel::top("toolbar")
             .frame(
                 egui::Frame::new()
-                    .fill(pl.content)
+                    .fill(pl.canvas)
                     .inner_margin(egui::Margin {
-                        left: 12,
-                        right: 12,
-                        top: 7,
-                        bottom: 7,
+                        left: 8,
+                        right: 8,
+                        top: 6,
+                        bottom: 6,
                     }),
             )
             .show_separator_line(false)
             .show(ctx, |ui| {
-                self.command_bar(ui, &mut actions);
+                self.toolbar(ui, &mut actions);
             });
-        hline(ctx, r.response.rect);
         egui::TopBottomPanel::bottom("status")
             .exact_height((23.0 * text_factor()).round())
             .frame(
                 egui::Frame::new()
-                    .fill(pl.status)
+                    .fill(pl.canvas)
                     .inner_margin(egui::Margin {
                         left: 14,
                         right: 8,
@@ -8814,16 +8754,17 @@ impl eframe::App for App {
             .width_range((150.0 * text_factor()).round()..=(480.0 * text_factor()).round())
             .frame(
                 egui::Frame::new()
-                    .fill(pl.content)
+                    .fill(pl.canvas)
                     .inner_margin(egui::Margin {
-                        left: 0,
-                        right: 0,
+                        left: 8,
+                        right: 8,
                         top: 0,
-                        bottom: 0,
+                        bottom: 8,
                     }),
             )
+            .show_separator_line(false)
             .show(ctx, |ui| {
-                self.sidebar(ui, &mut actions);
+                self.sidebar_card(ui, &mut actions);
             });
         if self.pane != 0 {
             egui::SidePanel::right("sidepane")
@@ -8842,20 +8783,16 @@ impl eframe::App for App {
         egui::CentralPanel::default()
             .frame(
                 egui::Frame::new()
-                    .fill(pl.content)
+                    .fill(pl.canvas)
                     .inner_margin(egui::Margin {
-                        left: 6,
-                        right: 4,
+                        left: 8,
+                        right: 8,
                         top: 2,
-                        bottom: 0,
+                        bottom: 8,
                     }),
             )
             .show(ctx, |ui| {
-                if self.split {
-                    self.split_area(ui, &mut actions);
-                } else {
-                    self.pane_body(ui, &mut actions);
-                }
+                self.content_card(ui, &mut actions);
             });
 
         self.dialogs(ctx);

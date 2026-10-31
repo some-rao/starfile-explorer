@@ -818,6 +818,22 @@ impl super::App {
         if !changed {
             return;
         }
+        // Arama sürerken palet sorgusu sonuçları canlı daraltır; eskiden bunu
+        // araç çubuğundaki arama kutusu yapardı.
+        let query = match self.palette.as_ref() {
+            Some(palette) => match parse_prefix(&palette.text) {
+                (Prefix::Files(_), rest) => rest.trim().to_string(),
+                _ => String::new(),
+            },
+            None => String::new(),
+        };
+        if self.tabs[self.active].search.is_some() {
+            let tab = &mut self.tabs[self.active];
+            if tab.filter != query {
+                tab.filter = query;
+                tab.view_dirty = true;
+            }
+        }
         let Some(palette) = self.palette.as_mut() else {
             return;
         };
@@ -1233,15 +1249,25 @@ impl super::App {
                     actions.push(action);
                 }
                 RowKind::ShowAll => {
-                    let filter = self
-                        .palette
-                        .as_ref()
-                        .map(|palette| parse_prefix(&palette.text).1.trim().to_string())
-                        .unwrap_or_default();
+                    let (prefix, filter) = {
+                        let Some(palette) = self.palette.as_ref() else {
+                            return;
+                        };
+                        let (prefix, rest) = parse_prefix(&palette.text);
+                        (prefix, rest.trim().to_string())
+                    };
+                    // Kapsam palet ön ekinden gelir: `;` alt klasörler, `;;` bu bilgisayar.
+                    let scope = match prefix {
+                        Prefix::Files(SearchScope::Subfolders) => SearchScope::Subfolders,
+                        Prefix::Files(SearchScope::ThisPc) => SearchScope::ThisPc,
+                        _ => SearchScope::Folder,
+                    };
                     let tab = &mut self.tabs[self.active];
                     tab.filter = filter;
                     tab.view_dirty = true;
                     self.close_palette();
+                    actions.push(Action::SetSearchScope(scope));
+                    actions.push(Action::StartSearch);
                 }
                 RowKind::Command(_) => {}
             },
@@ -1411,9 +1437,9 @@ impl super::App {
         for (entry, _, spans) in candidates.into_iter().take(MAX_ROWS) {
             rows.push(Row::file(&entry, base, spans));
         }
-        // The toolbar filter only sees the current folder, so a "show all"
-        // hand-off only makes sense there.
-        if scope == SearchScope::Folder && total > MAX_ROWS {
+        // "Tüm sonuçları göster" satırı: sonuçları sekmenin tamamında gösterir
+        // (kapsam palet ön ekinden gelir).
+        if total > MAX_ROWS {
             rows.push(Row {
                 kind: RowKind::ShowAll,
                 label: i18n::tf("Tüm sonuçları göster ({})", &[&total.to_string()]),

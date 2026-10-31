@@ -49,10 +49,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("İleri (Alt+Sağ ok)", "Adelante (Alt+Flecha derecha)"),
     ("Üst klasör (Alt+Yukarı ok)", "Subir a la carpeta principal (Alt+Flecha arriba)"),
     ("Yenile (F5)", "Actualizar (F5)"),
-    ("Sonuçlarda filtrele", "Filtrar resultados"),
-    ("{} klasöründe ara", "Buscar en {}"),
     ("Temizle (Esc)", "Borrar (Esc)"),
-    ("Yazdıkça bu klasörü anında filtreler.\nEnter: tüm alt klasörlerde ara.\n* ve ? joker karakterleri desteklenir (ör. *.pdf).", "Filtra esta carpeta mientras escribe.\nEnter: buscar en todas las subcarpetas.\nSe admiten los comodines * y ? (p. ej. *.pdf)."),
     ("Tab: tamamla · Enter: git", "Tab: completar · Enter: ir"),
     ("Yolu yazmak için tıklayın (Ctrl+L)", "Haga clic para escribir una ruta (Ctrl+L)"),
     ("Alt klasör yok", "No hay subcarpetas"),
@@ -401,4 +398,5 @@ pub static TABLE: &[(&str, &str)] = &[
     ("↑↓ taşı   ↵ çalıştır   Esc kapat", "↑↓ mover   ↵ ejecutar   Esc cerrar"),
     ("↑↓ taşı   ↵ git   Esc kapat", "↑↓ mover   ↵ ir   Esc cerrar"),
     ("↑↓ taşı   ↵ aç   Esc kapat", "↑↓ mover   ↵ abrir   Esc cerrar"),
+    ("Komut paletini aç (Ctrl+K)", "Abrir paleta de comandos (Ctrl+K)"),
 ];

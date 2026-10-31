@@ -49,10 +49,7 @@ pub static TABLE: &[(&str, &str)] = &[
     ("İleri (Alt+Sağ ok)", "進む (Alt+右方向キー)"),
     ("Üst klasör (Alt+Yukarı ok)", "親フォルダーへ (Alt+上方向キー)"),
     ("Yenile (F5)", "最新の情報に更新 (F5)"),
-    ("Sonuçlarda filtrele", "結果を絞り込む"),
-    ("{} klasöründe ara", "{}の検索"),
     ("Temizle (Esc)", "クリア (Esc)"),
-    ("Yazdıkça bu klasörü anında filtreler.\nEnter: tüm alt klasörlerde ara.\n* ve ? joker karakterleri desteklenir (ör. *.pdf).", "入力に合わせてこのフォルダーを絞り込みます。\nEnter: すべてのサブフォルダーを検索。\n* と ? のワイルドカードが使えます (例: *.pdf)。"),
     ("Tab: tamamla · Enter: git", "Tab: 補完 · Enter: 移動"),
     ("Yolu yazmak için tıklayın (Ctrl+L)", "クリックしてパスを入力 (Ctrl+L)"),
     ("Alt klasör yok", "サブフォルダーはありません"),
@@ -401,4 +398,5 @@ pub static TABLE: &[(&str, &str)] = &[
     ("↑↓ taşı   ↵ çalıştır   Esc kapat", "↑↓ 移動   ↵ 実行   Esc 閉じる"),
     ("↑↓ taşı   ↵ git   Esc kapat", "↑↓ 移動   ↵ 移動   Esc 閉じる"),
     ("↑↓ taşı   ↵ aç   Esc kapat", "↑↓ 移動   ↵ 開く   Esc 閉じる"),
+    ("Komut paletini aç (Ctrl+K)", "コマンドパレットを開く (Ctrl+K)"),
 ];
