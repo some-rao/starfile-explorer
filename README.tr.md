@@ -1,96 +1,165 @@
-# Swift Explorer
+# StarFile Explorer
 
-[![Sürüm](https://img.shields.io/github/v/release/misutesu-desu/swift-explorer)](../../releases/latest)
-[![Derleme](https://github.com/misutesu-desu/swift-explorer/actions/workflows/build.yml/badge.svg)](../../actions/workflows/build.yml)
+[![Sürüm](https://img.shields.io/github/v/release/some-rao/starfile-explorer)](../../releases/latest)
+[![Derleme](https://github.com/some-rao/starfile-explorer/actions/workflows/build.yml/badge.svg)](../../actions/workflows/build.yml)
 [![Lisans: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-[English](README.md) · [简体中文](README.zh-CN.md) · [日本語](README.ja.md)
+[English](README.md)
 
-Windows 11 Dosya Gezgini'nin görünümünde ve davranışında, Rust ile yazılmış bir dosya yöneticisi. Windows ve Linux'ta çalışır. Klasörler arka planda okunduğu için büyük klasörler pencereyi dondurmadan açılır; arama alt klasörlerde paralel yapılır.
+Windows 11 Dosya Gezgini gibi görünen ve çalışan, Rust ile yazılmış bir dosya yöneticisi: çerçevesiz
+akrilik pencere, başlık çubuğunda sekmeler, komut paleti, hızlı bakış, galeri ve satır içi önizlemeler.
+Klasörler arka planda okunduğu için büyük klasörler pencereyi dondurmaz, arama alt klasörlerde paralel
+çalışır.
 
-![Türkçe arayüz, tarihe göre gruplanmış büyük simgeler](docs/turkish.png)
+![Büyük simgeler, tarihe göre gruplu](docs/large-icons.png)
 
-## İndirme
+## Kurulum
 
-`SwiftExplorer.exe` dosyasını [Releases](../../releases) sayfasından indirin. Tek dosyadır, kurulum gerektirmez. Windows 11 için yapıldı; Windows 10'da da çalışması gerekir ama denenmedi.
+**Windows.** [Sürümler](../../releases) sayfasından `StarFile-Setup-<sürüm>.exe` dosyasını indirip çalıştırın.
+Yalnızca sizin kullanıcınız için kurulur (`%LOCALAPPDATA%\Programs\StarFile Explorer`), yönetici izni
+istemez ve Başlat menüsü kısayolunu kendisi oluşturur.
 
-[Scoop](https://scoop.sh) ile:
+- **Güncellemeler** uygulama içinden yapılır: yeni sürüm GitHub'dan indirilir, SHA-256 ile doğrulanır ve
+  pencereyi kapattığınızda devreye girer. Elle indirmeniz gerekmez. Görünüm > Güncellemeleri otomatik
+  kur bunu kapatır.
+- **Kaldırma** için Windows Ayarlar > Uygulamalar yolunu ya da Başlat menüsündeki girdiyi kullanın.
+  Kaldırıcı programı, otomatik başlatma kaydını ve dosya yöneticisi kaydını siler; ayarlarınız
+  (`%APPDATA%\StarFile`) bilerek korunur.
+- Yükleyici henüz **kod imzalı değil**, bu yüzden ilk çalıştırmada "Windows kişisel bilgisayarınızı
+  korudu" uyarısı çıkar: *Ek bilgi* > *Yine de çalıştır*.
 
-```powershell
-scoop bucket add misutesu https://github.com/misutesu-desu/scoop-bucket
-scoop install swift-explorer
-```
+`StarFile.exe` tek başına da yayınlanır; güncelleyicinin kullandığı dosya budur. Kurulum yapmadan
+çalışır ama Başlat menüsü girdisi, kaldırıcı ve güncelleme devri olmaz.
 
-Linux'ta kendi kullanıcınız için şu komutla kurabilirsiniz:
+**Linux.** Kullanıcınız için kurmak için:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/misutesu-desu/swift-explorer/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/some-rao/starfile-explorer/main/install.sh | sh
 ```
 
-`swift-explorer` dosyası `~/.local/bin` klasörüne kopyalanır ve uygulama menüsüne eklenir. Kaldırmak için aynı komutta `sh`'den sonra `-s -- --uninstall` yazın. Kurmadan denemek isterseniz `swift-explorer-linux-x86_64.tar.gz` dosyasını indirip içindeki `swift-explorer`'ı açabilirsiniz.
+`starfile` `~/.local/bin` içine kurulur ve uygulama menüsüne eklenir. Kaldırmak için aynı komutu `sh`
+sonrasına `-s -- --uninstall` ekleyerek çalıştırın. `starfile-linux-x86_64.tar.gz` arşivini indirip
+kurulum yapmadan da çalıştırabilirsiniz; `starfile.flatpak` dosyası
+`flatpak install --user starfile.flatpak` ile kurulur.
 
-0.2.0'dan sonraki sürümlerde `swift-explorer.flatpak` da var: `flatpak install --user swift-explorer.flatpak` ile kurulur.
+## Neler yapar
 
-## Neler var
+**Arayüz**
 
-- Explorer'la aynı düzen: başlık çubuğunda sekmeler, kırıntılı adres çubuğu, komut çubuğu, gezinti bölmesi, Giriş ve Bu bilgisayar sayfaları.
-- Windows'un kendi ikonları, küçük resimleri ve tür adları kullanılır.
-- Explorer'daki kısayolların hepsi aynı çalışır. F1 tam listeyi gösterir.
-- Arama kutusuna yazdıkça bulunduğunuz klasör filtrelenir. Enter'a basınca tüm alt klasörlerde arar; `*` ve `?` joker karakterleri çalışır.
-- Adres çubuğuna `cmd`, `powershell`, `pwsh` ya da `wt` yazınca o terminal bulunduğunuz klasörde açılır, `terminal` ise Windows Terminal'i açar. Linux'ta `terminal` varsayılan terminali, bir terminalin adı (`konsole`, `kitty`…) da o terminali açar.
-- Kopyala, kes, yapıştır ve sürükle-bırak Explorer ve masaüstüyle iki yönlü çalışır.
-- Shift + sağ tık Windows'un tam sağ tık menüsünü açar; 7-Zip, WinRAR ve Gönder orada.
-- Ctrl+Z yeniden adlandırma, taşıma, kopyalama ve geri dönüşüm kutusuna silme işlemlerini geri alır.
-- Görünüm > Tema altında Sistem, Açık ve Koyu'nun yanında Catppuccin, Gruvbox, Everforest, Nord, Dracula, Tokyo Night, Rosé Pine ve Solarized var.
-- Kopyalama ve taşıma, dosyalar diske yazılmadan bitmiş sayılmaz. Terminalde `sync` çalıştırmak gibi. İlerleme çubuğu kaybolunca USB bellek çıkarılabilir. Başka sürücüye taşırken asıl dosyalar ancak bundan sonra silinir.
-- Windows'ta pencere kapatılınca uygulama arka planda bekler. Yeniden açınca pencere, grafik sürücüsünün açılmasını beklemeden hemen gelir. Görünüm > Oturum açılınca arka planda başlat seçilirse bilgisayar açıldıktan sonraki ilk açılış da hızlı olur.
-- Windows'ta uygulama kendini günceller: yeni sürüm GitHub'dan indirilir, SHA-256 özetiyle doğrulanır ve pencere kapatılınca devreye girer. Scoop ile kurulduysa güncellemeyi `scoop update` yapar. Görünüm > Güncellemeleri otomatik yükle ile kapatılabilir.
-- Hedefte aynı adlı dosya varsa değiştirmek, atlamak ya da ikisini de saklamak arasında seçim sorar.
-- Diskteki değişiklikler açık klasörde anında görünür.
-- İndirilenler, Explorer'daki gibi değiştirme tarihine göre gruplanır (Bugün, Dün, Geçen hafta…). Diğer klasörler Sırala > Grupla'dan gruplanabilir.
-- Türkçe, İngilizce, Almanca, İspanyolca, Fransızca, Portekizce (Brezilya), Rusça, Çince (Basitleştirilmiş) ve Japonca arayüz. Dil Windows'a göre seçilir, Görünüm > Dil'den değiştirilebilir.
-- Çince, Japonca ve Korece dosya adları sistemin CJK fontlarıyla görünür.
+- Explorer ile aynı düzen: başlık çubuğunda sekmeler, adres çubuğunu içeren tek araç çubuğu kartı,
+  gezinti bölmesi, Giriş, Galeri ve Bu bilgisayar sayfaları.
+- Pencerenin sistem başlık çubuğu yoktur: başlık, sekme şeridi ve pencere düğmeleri uygulama tarafından
+  masaüstü duvar kağıdını izleyen akrilik zemin üzerine çizilir. Büyütüldüğünde pencere görev çubuğunun
+  altına kaymaz, tam kenarında durur.
+- Sekmeler taşınabilen, sıralanabilen, çoğaltılabilen ve ayrılabilen hap biçimli düğmelerdir. Ctrl+T,
+  Ctrl+W, Ctrl+Tab ve orta tık Explorer'daki gibi çalışır.
+- Simgeler, küçük resimler ve dosya türü adları Windows'tan gelir.
+- Her Explorer kısayolu aynı şekilde çalışır. Tam liste için F1.
+- Sistem, Açık ve Koyu dışında Görünüm > Tema menüsünde Catppuccin (Mocha, Latte), Gruvbox, Everforest,
+  Nord, Dracula, Tokyo Night, Rosé Pine ve Solarized var.
+- Arayüz İngilizce, Türkçe, Almanca, İspanyolca, Fransızca, Brezilya Portekizcesi, Rusça, Basitleştirilmiş
+  Çince ve Japonca. Dil Windows'u izler, Görünüm > Dil menüsünden değiştirilir.
+- Çince, Japonca ve Korece dosya adları sistemin CJK yazı tipleriyle görünür.
 
-Diğer ekran görüntüleri [İngilizce README](README.md)'de.
+**Arama ve önizleme**
 
-Tür sütunu ve Shift + sağ tık menüsü Windows'tan gelir; uygulama İngilizceye alınsa da bunlar Windows'un dilinde kalır.
+- Ctrl+K komut paletini açar: yazdıkça dosya arar, her komutu çalıştırır, bir yola veya son klasöre atlar.
+  Ctrl+E, Ctrl+F ve F3 de açar; `*` ve `?` joker karakterleri çalışır.
+- Boşluk tuşu seçili öğede Hızlı Bakış açar: resimler, PDF'ler, ses ve video satır içinde oynar, metin ve
+  Markdown söz dizimi renklendirmesiyle gösterilir, klasörler içeriğini listeler.
+- Markdown, PDF ve video önizlemeleri gömülü WebView2 bölmesinde çizilir; bir README veya PDF başka bir
+  uygulamada değil, bulunduğunuz yerde açılır.
+- Adres çubuğuna `cmd`, `powershell`, `pwsh` veya `wt` yazmak o terminali bulunduğunuz klasörde açar,
+  `terminal` Windows Terminal'i açar. `\\wsl$\…` yolları diğer klasörler gibi açılır.
+- Git sütunu bir deponun dal durumunu klasörün içinde gösterir.
+
+**Dosyalar**
+
+- Kopyala, kes, yapıştır ve sürükle-bırak Explorer ve masaüstüyle iki yönde çalışır.
+- Shift + sağ tık tam Windows bağlam menüsünü açar; 7-Zip, WinRAR ve Gönder buradadır.
+- Ctrl+Z yeniden adlandırmayı, taşımayı, kopyalamayı ve Geri Dönüşüm Kutusu'na silmeyi geri alır.
+- Kopyalama veya taşıma, dosyalar diske yazıldıktan sonra biter (terminaldeki `sync` gibi). İlerleme
+  çubuğu kaybolduğunda USB bellek çıkarılabilir; başka sürücüye taşımada kaynaklar ancak ondan sonra
+  silinir.
+- Aynı adlı dosya varsa değiştir, atla veya ikisini de sakla diye sorar.
+- Klasörler diskte değişiklik olduğunda canlı güncellenir.
+- İndirilenler tarihe göre gruplanır (Bugün, Dün, Geçen hafta…). Diğer klasörler Sırala > Grupla ile
+  gruplanabilir.
+- Windows'ta pencereyi kapatmak uygulamayı arka planda bekletir; yeniden açıldığında pencere ekran
+  kartının başlamasını beklemeden hemen görünür. Görünüm > Oturum açılışında arka planda başlat ile
+  yeniden başlatma sonrası ilk açılış da hızlı olur.
+
+| Ayrıntılar | Bu bilgisayar |
+| --- | --- |
+| ![Ayrıntılar görünümü](docs/details.png) | ![Bu bilgisayar](docs/this-pc.png) |
+
+| Açık tema | Türkçe arayüz |
+| --- | --- |
+| ![Açık tema](docs/light.png) | ![Türkçe arayüz](docs/turkish.png) |
+
+Tür sütunu ve Shift + sağ tık menüsü Windows'tan geldiği için, uygulama İngilizce olsa bile Windows'un
+görüntüleme dilinde kalır.
 
 ## Linux
 
-Linux sürümü yeni ve Windows sürümü kadar denenmedi. Görünüm ve kısayollar aynı; farklar şunlar:
+Linux sürümü Windows kadar test edilmedi. Görünüm ve kısayollar aynı, farklar şunlar:
 
-- İkonlar masaüstünün ikon temasından gelir. PNG, JPEG, GIF, WebP ve BMP için küçük resim gösterilir.
-- Windows'un sağ tık menüsü yok; Shift + sağ tık ve Shift+F10 uygulamanın kendi menüsünü açar.
-- Kopyalanan dosyalar panoya yol listesi olarak yazılır. Başka dosya yöneticilerinden kopyalanan yollar ve `file://` bağlantıları yapıştırılabilir; ters yönü çalışmayabilir.
-- Pencereden dışarı sürükleme henüz yok. Pencereye dosya bırakmak X11'de çalışır.
-- "Bu bilgisayar" sayfası `/` ve `/media`, `/run/media`, `/mnt` altına bağlanan diskleri gösterir.
-- Özellikler uygulamanın kendi penceresini açar. Genel, Güvenlik ve Ayrıntılar sekmelerinde izinler ve varsayılan uygulama değiştirilebilir.
-- "Dosya yöneticisinde göster", D-Bus üzerinden dosya yöneticinizi kullanır (Nautilus, Dolphin, Nemo ve Thunar destekler).
+- Simgeler masaüstünüzün simge temasından gelir. PNG, JPEG, GIF, WebP ve BMP için küçük resim gösterilir.
+- Windows bağlam menüsü yok; Shift + sağ tık ve Shift+F10 uygulamanın kendi menüsünü açar.
+- Kopyalanan dosyalar panoya yol listesi olarak gider. Diğer dosya yöneticilerinden kopyalanan yollar ve
+  `file://` bağlantıları yapıştırılabilir; başka yöneticilere yapıştırmak çalışmayabilir.
+- Dosyaları pencere dışına sürüklemek henüz çalışmıyor; içine bırakmak X11'de çalışır.
+- "Bu bilgisayar" `/` ile `/media`, `/run/media` ve `/mnt` altındaki diskleri listeler.
+- Özellikler, Genel, Güvenlik ve Ayrıntılar sekmeleri olan kendi penceresini açar; izinler ve varsayılan
+  uygulama buradan değiştirilir.
+- "Dosya yöneticisinde göster" D-Bus üzerinden kendi dosya yöneticinizi kullanır (Nautilus, Dolphin,
+  Nemo ve Thunar destekler).
 
 ## Derleme
 
-Rust 1.82 ya da daha yenisi gerekir.
+Rust 1.82 veya daha yenisi gerekir.
 
 ```bash
 cargo build --release
 ```
 
-Çalıştırılabilir dosya Windows'ta `target/release/swift-explorer.exe`, Linux'ta `target/release/swift-explorer` konumuna yazılır.
+Çalıştırılabilir dosya Windows'ta `target/release/starfile.exe`, Linux'ta `target/release/starfile` olur.
+`cargo test` ayrıca çeviri tabloları birbiriyle uyuşmazsa başarısız olur.
 
-## Çeviriler
+Kurulum dosyası için [Inno Setup 6](https://jrsoftware.org/isinfo.php) kurup şunu çalıştırın:
 
-Her dil [`src/i18n/`](src/i18n) içinde tek bir dosyadır. Yeni dil eklemek için `de.rs`'yi kopyalayın, her satırdaki ikinci metni çevirin, ardından [`src/i18n.rs`](src/i18n.rs) içine bir `mod` satırı ekleyip dili `LANGS`, `tables()` ve `system_lang()` içine yazın. Mevcut çevirilerdeki düzeltmeler de memnuniyetle karşılanır; henüz anadili bu diller olan biri kontrol etmedi.
+```powershell
+ISCC.exe /DAppVersion=0.8.0 packaging\windows\starfile.iss
+```
+
+Çıktı `dist\StarFile-Setup-0.8.0.exe` olur. Sürüm iş akışı her etikette aynısını yapar.
 
 ## Ayarlar
 
-Ayarlar Windows'ta `%APPDATA%\SwiftExplorer\config.json`, Linux'ta `~/.config/SwiftExplorer/config.json` dosyasında tutulur. `SWIFT_EXPLORER_LANG` ortam değişkenine bir dil kodu (`en`, `tr`, `de`, `es`, `fr`, `pt`, `ru`, `zh`, `ja`) verilirse dil ayarının önüne geçer.
+Ayarlar Windows'ta `%APPDATA%\StarFile\config.json`, Linux'ta `~/.config/StarFile/config.json` içinde
+tutulur. Uygulama ilk açılışta eski Swift Explorer kurulumunun ayarlarını (`%APPDATA%\SwiftExplorer`)
+kopyalar, böylece ad değişikliğinden sonra tercihleriniz korunur. `STARFILE_LANG` ortam değişkenine bir
+dil kodu (`en`, `tr`, `de`, `es`, `fr`, `pt`, `ru`, `zh`, `ja`) vermek dil ayarını geçersiz kılar; eski
+kısayollar için `SWIFT_EXPLORER_LANG` de okunur.
 
 ## Bilinen sınırlar
 
 - Ayrıntılar görünümünde seçim dikdörtgeni yalnızca satırların altındaki boş alandan başlatılabilir.
-- Windows çok uzun yollardaki (yaklaşık 260+ karakter) dosyaları geri dönüşüm kutusuna taşıyamaz; bu dosyalar doğrudan silinir ve Ctrl+Z geri getiremez.
+- Windows, çok uzun yollu (yaklaşık 260+ karakter) dosyaları Geri Dönüşüm Kutusu'na taşıyamaz; doğrudan
+  silinir ve Ctrl+Z geri getiremez.
 - Ağ konumları Windows Dosya Gezgini'nde açılır.
+- Yükleyici imzasızdır (bkz. [Kurulum](#kurulum)).
+
+## Katkı ve teşekkür
+
+StarFile Explorer, [Swift Explorer](https://github.com/misutesu-desu/swift-explorer) projesinin bir
+çatalıdır; dosya yöneticisinin kendisi, kabuk entegrasyonu, komut paleti, hızlı bakış ve arayüzün büyük
+bölümü Abdullah Şafer'e aittir. Bu çatal adı, simgeyi, kurulum/güncelleme kanalını ve çerçevesiz pencere
+çalışmasını ekler. İki proje de MIT lisanslıdır; özgün telif bildirimi [`LICENSE`](LICENSE) içinde
+korunmuştur, ayrıntılar [`NOTICE`](NOTICE) dosyasındadır.
 
 ## Lisans
 
-[MIT](LICENSE). Linux sürümü Microsoft'un [Fluent UI System Icons](https://github.com/microsoft/fluentui-system-icons) setinden birkaç ikon içerir ([MIT](assets/LICENSE-fluent-icons.txt)).
+[MIT](LICENSE). Linux derlemesi Microsoft'un
+[Fluent UI System Icons](https://github.com/microsoft/fluentui-system-icons) simgelerinden birkaçını içerir
+([MIT](assets/LICENSE-fluent-icons.txt)). Tam liste için [`NOTICE`](NOTICE).

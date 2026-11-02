@@ -1,0 +1,25 @@
+StarFile Explorer
+=================
+
+StarFile Explorer is a fork of Swift Explorer
+(https://github.com/misutesu-desu/swift-explorer),
+Copyright (c) 2026 Abdullah Şafer.
+
+The original project is released under the MIT License. That license is kept
+unchanged for the code inherited from it, and the original copyright notice is
+reproduced in LICENSE next to the copyright of this fork. Every file in this
+repository is available under the same MIT terms.
+
+What this fork changes: application name, icon, application identifier
+(`io.github.some_rao.StarFile`), installer and update channel, and the window
+chrome work (work-area clamp for the maximized window, no DWM caption strip).
+The feature set and architecture come from the original project.
+
+Bundled third-party assets
+--------------------------
+
+- Fluent UI System Icons, Microsoft — MIT License.
+  See `assets/LICENSE-fluent-icons.txt`.
+- `vendor/epaint` is a patched copy of epaint from the egui project, dual
+  licensed MIT OR Apache-2.0 by the egui authors. The upstream license text and
+  the list of local changes are in `vendor/epaint/README.md`.
