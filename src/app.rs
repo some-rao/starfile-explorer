@@ -3518,6 +3518,26 @@ impl App {
         }
     }
 
+    /// Pencereyi büyütür/geri getirir.
+    ///
+    /// Durumu Windows yönetir (`WM_SYSCOMMAND`); geçiş animasyonu yok — bkz.
+    /// `shell::toggle_maximize`. Başlık düğmesinin ikonu `IsZoomed`'dan okunur.
+    fn toggle_maximize(&mut self, maximized: bool) {
+        let Some(hwnd) = self.hwnd else { return };
+        shell::toggle_maximize(hwnd, maximized);
+    }
+
+    /// Pencereyi görev çubuğuna küçültür.
+    fn minimize(&mut self) {
+        let Some(hwnd) = self.hwnd else { return };
+        shell::minimize_window(hwnd);
+        // egui'ye de bildirilir: `App::update` simge durumunu buradan okuyup
+        // pencere geometrisini kaydeder. winit'in yapacağı ikinci `SW_MINIMIZE`
+        // etkisizdir.
+        self.ctx
+            .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+    }
+
     fn tab_bar(&mut self, ui: &mut egui::Ui, actions: &mut Vec<Action>) {
         let accent = self.accent;
         let p = pal_of(ui);
@@ -3528,14 +3548,16 @@ impl App {
             egui::pos2(ui.max_rect().left(), ui.max_rect().top() - TAB_GAP),
             ui.max_rect().max,
         );
-        let maximized = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
+        let maximized = self
+            .hwnd
+            .map(shell::is_maximized)
+            .unwrap_or_else(|| ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false)));
         let drag = ui.interact(bar, egui::Id::new("title_drag"), Sense::click_and_drag());
         if drag.drag_started_by(egui::PointerButton::Primary) {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
         }
         if drag.double_clicked() {
-            ui.ctx()
-                .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+            self.toggle_maximize(maximized);
         }
         let n = self.tabs.len();
         // Explorer'da sekme en fazla ~236 px; sığmazsa daralır
@@ -3701,15 +3723,13 @@ impl App {
                     (Caption::Maximize, crate::i18n::t("Ekranı kapla"))
                 };
                 if caption_button(ui, kind).on_hover_text(tip).clicked() {
-                    ui.ctx()
-                        .send_viewport_cmd(egui::ViewportCommand::Maximized(!maximized));
+                    self.toggle_maximize(maximized);
                 }
                 if caption_button(ui, Caption::Minimize)
                     .on_hover_text(crate::i18n::t("Simge durumuna küçült"))
                     .clicked()
                 {
-                    ui.ctx()
-                        .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                    self.minimize();
                 }
             });
         });
@@ -8210,6 +8230,10 @@ impl eframe::App for App {
                     let hwnd = w.hwnd.get();
                     self.hwnd = Some(hwnd);
                     crate::system::set_hwnd(hwnd);
+                    // Alt sınıf önce: `WM_NCCALCSIZE` işleyicisi başlık stilini
+                    // geri almadan hazır olmalı, yoksa bir kare sistem başlığı
+                    // görünür.
+                    shell::install_subclass(hwnd);
                     let dark = ctx.style().visuals.dark_mode;
                     let line = pal_solid(dark).line;
                     crate::system::apply_backdrop(dark, (line.r(), line.g(), line.b()));
@@ -8220,15 +8244,15 @@ impl eframe::App for App {
                     if GLASS.swap(glass_now, Relaxed) != glass_now {
                         ctx.request_repaint();
                     }
-                    shell::install_subclass(hwnd);
                     // eframe pencereyi ilk kareden sonra gösterir; o an DWM henüz
                     // GL yüzeyini almadığından bir kare beyaz parlar. Hazır olana dek gizle.
                     shell::set_cloak(hwnd, true);
                 }
             }
         }
-        // winit stilleri yeniden uygulayıp `WS_CAPTION`'ı geri getirebilir; DWM'nin
-        // ikinci düğme takımını çizmemesi için her karede temizlenir.
+        // winit stilleri yeniden uygulayıp `WS_CAPTION`'ı geri getirebilir; DWM de
+        // o zaman vurgu rengiyle bir üst şerit ve ikinci bir düğme takımı çizer.
+        // Bu yüzden her karede ucuzca temizlenir.
         if let Some(hwnd) = self.hwnd {
             crate::system::ensure_no_caption(hwnd);
         }

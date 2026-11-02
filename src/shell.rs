@@ -13,8 +13,9 @@ use windows::Win32::Foundation::{
 };
 use windows::Win32::Graphics::Dwm::{DwmGetColorizationColor, DwmSetWindowAttribute, DWMWA_CLOAK};
 use windows::Win32::Graphics::Gdi::{
-    DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO, BITMAPINFOHEADER,
-    BI_RGB, DIB_RGB_COLORS, HBITMAP,
+    DeleteObject, GetDC, GetDIBits, GetMonitorInfoW, GetObjectW, MonitorFromWindow, ReleaseDC,
+    BITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP, MONITORINFO,
+    MONITOR_DEFAULTTONEAREST,
 };
 use windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL;
 use windows::Win32::System::Com::{
@@ -39,14 +40,15 @@ use windows::Win32::UI::Shell::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreatePopupMenu, DestroyMenu, GetAncestor, GetCursorPos, GetMenuItemCount,
-    GetMenuItemInfoW, GetMenuStringW, GetWindowRect, IsZoomed, SetWindowsHookExW, TrackPopupMenuEx,
-    UnhookWindowsHookEx, WindowFromPoint, CBT_CREATEWNDW, GA_ROOT, HCBT_CREATEWND, HHOOK, HMENU,
-    HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT,
-    MENUITEMINFOW, MENU_ITEM_MASK, MFS_CHECKED, MFS_DISABLED, MFT_SEPARATOR, MF_BYCOMMAND,
-    MIIM_BITMAP, MIIM_FTYPE, MIIM_ID, MIIM_STATE, MIIM_STRING, MIIM_SUBMENU, SW_SHOWNORMAL,
-    TPM_RETURNCMD, TPM_RIGHTBUTTON, WH_CBT, WM_CREATE, WM_DRAWITEM, WM_INITMENUPOPUP,
-    WM_MEASUREITEM, WM_MENUCHAR, WM_MENUSELECT, WM_NCHITTEST, WM_SETTINGCHANGE, WM_SHOWWINDOW,
-    WM_THEMECHANGED, WS_CHILD,
+    GetMenuItemInfoW, GetMenuStringW, GetWindowRect, IsZoomed, SendMessageW, SetWindowsHookExW,
+    TrackPopupMenuEx, UnhookWindowsHookEx, WindowFromPoint, CBT_CREATEWNDW, GA_ROOT,
+    HCBT_CREATEWND, HHOOK, HMENU, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCLIENT, HTLEFT, HTRIGHT,
+    HTTOP, HTTOPLEFT, HTTOPRIGHT, MENUITEMINFOW, MENU_ITEM_MASK, MFS_CHECKED, MFS_DISABLED,
+    MFT_SEPARATOR, MF_BYCOMMAND, MIIM_BITMAP, MIIM_FTYPE, MIIM_ID, MIIM_STATE, MIIM_STRING,
+    MIIM_SUBMENU, MINMAXINFO, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE, SW_SHOWNORMAL, TPM_RETURNCMD,
+    TPM_RIGHTBUTTON, WH_CBT, WM_CREATE, WM_DRAWITEM, WM_GETMINMAXINFO, WM_INITMENUPOPUP,
+    WM_MEASUREITEM, WM_MENUCHAR, WM_MENUSELECT, WM_NCCALCSIZE, WM_NCHITTEST, WM_SETTINGCHANGE,
+    WM_SHOWWINDOW, WM_SYSCOMMAND, WM_THEMECHANGED, WS_CHILD,
 };
 
 pub use crate::images::{ImageCache, Img};
@@ -330,6 +332,52 @@ pub fn install_subclass(hwnd: isize) {
     }
 }
 
+/// Pencerenin bulunduğu monitörün çalışma alanı (görev çubuğu hariç) ve monitör
+/// dikdörtgeni. `None`, bilgi alınamadığında döner.
+fn work_area(hwnd: HWND) -> Option<(RECT, RECT)> {
+    unsafe {
+        let mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        let mut mi = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
+        if !GetMonitorInfoW(mon, &mut mi).as_bool() {
+            return None;
+        }
+        Some((mi.rcWork, mi.rcMonitor))
+    }
+}
+
+/// Pencere büyütülmüş mü? (`IsZoomed`)
+pub fn is_maximized(hwnd: isize) -> bool {
+    unsafe { IsZoomed(HWND(hwnd as *mut c_void)).as_bool() }
+}
+/// Pencereyi büyütülmüş duruma geçirir veya geri getirir.
+///
+/// `WM_SYSCOMMAND` kullanılır çünkü pencere durumunu (`IsZoomed`, görev çubuğu
+/// davranışı, sonraki geri getirme konumu) Windows'un kendi yolu yönetir.
+///
+/// Geçiş animasyonu yok: çerçevesiz pencerede (`WS_CAPTION` yok,
+/// `DWMNCRP_DISABLED`) DWM kendi büyütme animasyonunu çalıştırmıyor, pencereyi
+/// kare kare kendimiz boyutlandırmak da her adımda arayüzün yeniden yerleşmesine
+/// ve takas zincirinin yeniden kurulmasına yol açıyor (titrek ve bozuk görünüm).
+pub fn toggle_maximize(hwnd: isize, maximized: bool) {
+    unsafe {
+        let hwnd = HWND(hwnd as *mut c_void);
+        let cmd = if maximized { SC_RESTORE } else { SC_MAXIMIZE };
+        SendMessageW(hwnd, WM_SYSCOMMAND, WPARAM(cmd as usize), LPARAM(0));
+    }
+}
+
+/// Pencereyi görev çubuğuna küçültür. Küçültme animasyonunu kabuk çalıştırır,
+/// bu yüzden burada ayrıca bir şey yapılmaz.
+pub fn minimize_window(hwnd: isize) {
+    unsafe {
+        let hwnd = HWND(hwnd as *mut c_void);
+        SendMessageW(hwnd, WM_SYSCOMMAND, WPARAM(SC_MINIMIZE as usize), LPARAM(0));
+    }
+}
+
 unsafe extern "system" fn subclass_proc(
     hwnd: HWND,
     msg: u32,
@@ -342,6 +390,39 @@ unsafe extern "system" fn subclass_proc(
     if msg == WM_SETTINGCHANGE || msg == WM_THEMECHANGED {
         crate::system::mark_dirty();
         crate::system::repaint();
+    }
+    if msg == WM_GETMINMAXINFO {
+        // Büyütülmüş pencere görev çubuğunun altına girmesin: en büyük konum ve
+        // boyut monitörün *çalışma alanına* (`rcWork`) sınırlanır. Bu olmadan
+        // Windows pencereyi tüm ekrana açıyor ve alt bilgi çubuğu görev
+        // çubuğunun üstüne biniyor.
+        if lp.0 != 0 {
+            if let Some((work, mon)) = work_area(hwnd) {
+                let mmi = &mut *(lp.0 as *mut MINMAXINFO);
+                mmi.ptMaxPosition.x = work.left - mon.left;
+                mmi.ptMaxPosition.y = work.top - mon.top;
+                mmi.ptMaxSize.x = work.right - work.left;
+                mmi.ptMaxSize.y = work.bottom - work.top;
+            }
+        }
+    }
+    if msg == WM_NCCALCSIZE && wp.0 != 0 {
+        // Kendi başlık çubuğumuzu çiziyoruz; DWM'nin sistem başlığını (ve
+        // ikinci bir düğme takımını) çizmemesi için istemci alanı pencerenin
+        // tamamını kaplar.
+        if IsZoomed(hwnd).as_bool() {
+            // Büyütülmüş pencere, gölge için çalışma alanının 8 px dışına
+            // taşar. İstemci alanını çalışma alanına sabitlersek içerik
+            // (alt bilgi çubuğu dahil) görev çubuğunun tam üstünde biter.
+            if let Some((work, _)) = work_area(hwnd) {
+                let r = &mut *(lp.0 as *mut RECT);
+                r.left = work.left;
+                r.top = work.top;
+                r.right = work.right;
+                r.bottom = work.bottom;
+            }
+        }
+        return LRESULT(0);
     }
     if msg == WM_NCHITTEST {
         // İstemci alanı çerçeveye yayıldığı için varsayılan yanıt HTCAPTION olur;

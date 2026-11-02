@@ -209,11 +209,10 @@ mod imp {
 
     /// Başlık çubuğu stillerini kaldırır.
     ///
-    /// `DwmExtendFrameIntoClientArea` pencerenin tamamını çerçeveye çevirdiğinde,
-    /// `WS_CAPTION`/`WS_SYSMENU` hâlâ duruyorsa DWM temanın kendi küçült/büyüt/kapat
-    /// düğmelerini de çizer ve uygulamanın kendi düğmelerinin yanında ikinci bir takım
-    /// belirir. Stilleri kaldırınca çerçeve yine saydam kalır (cam/saydamlık için
-    /// yeterli) ama sistem düğmeleri çizilmez.
+    /// `WS_CAPTION`/`WS_SYSMENU` duruyorsa DWM Windows 11'in vurgu rengiyle
+    /// çizdiği üst şeridi ve kendi küçült/büyüt/kapat düğmelerini çizer; bunlar
+    /// uygulamanın kendi başlık çubuğunun yanında ikinci bir takım olarak
+    /// belirir. Stiller kaldırıldığında süreç tamamen bize kalır.
     unsafe fn strip_caption(hwnd: isize) {
         use windows_sys::Win32::UI::WindowsAndMessaging::{
             GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, SWP_FRAMECHANGED,
@@ -238,9 +237,9 @@ mod imp {
     }
 
     /// winit pencere bayrakları değiştiğinde stilleri yeniden yazar ve `WS_CAPTION`'ı
-    /// geri getirir (bkz. winit `window_state.rs`); DWM de o zaman ikinci bir sistem
-    /// düğmesi takımı çizer. Her karede ucuzca geri alınır: stil zaten temizse
-    /// fonksiyon hiçbir şey yapmadan döner.
+    /// geri getirebilir (bkz. winit `window_state.rs`); DWM de o zaman ikinci bir
+    /// sistem düğmesi takımı çizer. Her karede ucuzca geri alınır: stil zaten
+    /// temizse fonksiyon hiçbir şey yapmadan döner.
     pub fn ensure_no_caption(hwnd: isize) {
         unsafe { strip_caption(hwnd) }
     }
@@ -288,9 +287,9 @@ mod imp {
                 &color as *const _ as *const c_void,
                 std::mem::size_of::<u32>() as u32,
             );
-            // DWM'nin kendi istemci-dışı alanını (başlık çubuğu) çizmesini kapat.
-            // Bu, sistem vurgu rengiyle (mavi şerit) çizilen üst bantı kaldırır;
-            // akrilik bu alana da yayılır. Yuvarlatılmış köşeler ve gölge korunur.
+            // DWM'nin istemci-dışı çizimini kapat: pencere başlıksız olduğu için
+            // DWM'nin çizeceği bir şey yok, ama açık bırakıldığında Windows 11
+            // vurgu rengiyle bir üst şerit ve ikinci bir düğme takımı beliriyor.
             let nc = DWMNCRP_DISABLED;
             let _ = DwmSetWindowAttribute(
                 hwnd,
@@ -298,7 +297,7 @@ mod imp {
                 &nc as *const _ as *const c_void,
                 std::mem::size_of_val(&nc) as u32,
             );
-            // Sistem düğmeleri ikinci kez çizilmesin diye önce başlık stillerini kaldır.
+            // Sistem düğmeleri ikinci kez çizilmesin diye başlık stilleri kaldırılır.
             strip_caption(raw);
             let backdrop = DWMSBT_TRANSIENTWINDOW;
             let ok = DwmSetWindowAttribute(
