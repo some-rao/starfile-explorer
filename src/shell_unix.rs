@@ -298,3 +298,15 @@ pub fn pick_folder(_owner: isize, start: Option<&Path>) -> Option<PathBuf> {
     }
     try_cmd("kdialog", args)
 }
+
+/// Linux'da pencere yönetimi yok; bu işlevler yok sayılır.
+#[allow(dead_code)]
+pub fn toggle_maximize(_hwnd: isize, _maximized: bool) {}
+
+#[allow(dead_code)]
+pub fn minimize_window(_hwnd: isize) {}
+
+#[allow(dead_code)]
+pub fn is_maximized(_hwnd: isize) -> bool {
+    false
+}

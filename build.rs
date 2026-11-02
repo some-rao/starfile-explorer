@@ -10,7 +10,10 @@ fn main() {
         res.set("InternalName", "starfile");
         res.set("ProductVersion", env!("CARGO_PKG_VERSION"));
         res.set("FileVersion", env!("CARGO_PKG_VERSION"));
-        res.set("LegalCopyright", "MIT. Fork of Swift Explorer by Abdullah Safer.");
+        res.set(
+            "LegalCopyright",
+            "MIT. Fork of Swift Explorer by Abdullah Safer.",
+        );
         // MSVC baglayicisi uygulama bildirimini (comctl32 v6 dahil) kendisi ekler; MinGW'de eklemez.
         // Bildirim olmazsa SetWindowSubclass gibi islevler bulunamaz ve uygulama acilmaz.
         if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("gnu") {
