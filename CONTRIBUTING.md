@@ -1,28 +1,104 @@
-# Contributing
+# Contributing to StarFile Explorer
 
-Bug reports, translations and pull requests are all welcome.
+Thank you for your interest in contributing to StarFile Explorer! This document provides guidelines and instructions for contributing.
 
-## Building
+## How to Contribute
 
-You need Rust 1.82 or newer.
+### Reporting Bugs
+
+If you find a bug, please open an issue with:
+- A clear description of the problem
+- Steps to reproduce (if applicable)
+- Your operating system and version
+- Screenshots if helpful
+- The version number (visible in Help > About)
+
+### Suggesting Features
+
+Feature requests are welcome! Please open an issue with:
+- A clear description of the proposed feature
+- Why it would be useful
+- Any mockups or screenshots
+
+### Pull Requests
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Make your changes
+4. Run tests: `cargo test`
+5. Commit your changes (`git commit -m 'Add amazing feature'`)
+6. Push to the branch (`git push origin feature/amazing-feature`)
+7. Open a Pull Request
+
+## Development Setup
+
+### Prerequisites
+
+- Rust 1.82 or newer
+- Git
+- For Windows installer: Inno Setup 6
+
+### Building
 
 ```bash
+# Build the project
 cargo build --release
+
+# Run tests
 cargo test
+
+# Format code
+cargo fmt --all
+
+# Run linter
+cargo clippy --all-targets
 ```
 
-The Windows build uses the Windows shell for icons, the context menu and the clipboard; the Linux build replaces those in `src/shell_unix.rs` and `src/win_unix.rs`.
+### Building the Windows Installer
 
-## Translations
+```powershell
+# Install Inno Setup 6 first
+ISCC.exe /DAppVersion=0.8.0 packaging\windows/starfile.iss
 
-Interface text lives in [`src/i18n.rs`](src/i18n.rs) (Turkish keys and English) and one file per language in [`src/i18n/`](src/i18n). The [README](README.md#translations) explains how to add a language. `cargo test` fails if a language file is missing a line. Issues labeled [`translation`](../../labels/translation) list the languages that need a translator or a native-speaker check.
+# Output: dist/StarFile-Setup-0.8.0.exe
+```
 
-## Pull requests
+## Code Style
 
-- Keep a pull request to one change, so it's easy to review and to revert.
-- The app copies Windows 11 File Explorer: if something behaves differently from Explorer, Explorer is usually right.
-- New code comments and commit messages are in English. Existing Turkish comments can stay until the file is touched.
+- Follow existing Rust conventions
+- Use `cargo fmt` to auto-format
+- Ensure `cargo clippy` passes without warnings
+- Add your name to contributors if this is your first contribution
 
-## Screenshots
+## Translation
 
-`cargo build --release --features screenshot` builds a version that saves a picture of its own window and exits. See [`src/screenshot.rs`](src/screenshot.rs) for the environment variables. It's how the README images are made.
+The project uses Turkish strings as i18n keys. To add or update translations:
+
+1. Create a new file in `src/i18n/{lang}.rs` (copy from `de.rs`)
+2. Translate all English strings
+3. Add `mod {lang};` in `src/i18n.rs`
+4. Add entries in `LANGS`, `tables()`, and `system_lang()`
+5. Run `cargo test` to verify
+
+See the [German translation commit](https://github.com/misutesu-desu/swift-explorer/commit/main/src/i18n/de.rs) as a reference.
+
+## Project Structure
+
+```
+starfile/
+├── src/                    # Rust source code
+│   ├── i18n/              # Translations
+│   └── *.rs               # Modules
+├── assets/                # Icons, fonts
+├── packaging/             # Installer and package files
+├── docs/                  # Documentation
+└── CONTRIBUTING.md        # This file
+```
+
+## Questions?
+
+Join the discussion or ask questions in the [GitHub Discussions](https://github.com/some-rao/starfile-explorer/discussions) section.
+
+## License
+
+By contributing, you agree that your contributions will be licensed under the MIT License.
