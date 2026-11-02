@@ -1,10 +1,10 @@
 //! README görüntülerini yeniden üretmek için: `--features screenshot` ile derlenip
-//! `SWIFT_EXPLORER_SCREENSHOT=çıktı.bmp` verilince pencere birkaç saniye sonra kendi
+//! `STARFILE_SCREENSHOT=çıktı.bmp` verilince pencere birkaç saniye sonra kendi
 //! görüntüsünü BMP olarak kaydeder ve kapanır. Pencere gizli bir masaüstünde olsa da çalışır.
 //!
-//! `SWIFT_EXPLORER_SCREENSHOT_SIZE=1280x800` pencere boyutunu,
-//! `SWIFT_EXPLORER_SCREENSHOT_DELAY=4` beklenecek saniyeyi belirler.
-//! `SWIFT_EXPLORER_SCREENSHOT_INPUT=click:820,130;key:F1` görüntüden önce sırayla tıklar ve tuşa basar
+//! `STARFILE_SCREENSHOT_SIZE=1280x800` pencere boyutunu,
+//! `STARFILE_SCREENSHOT_DELAY=4` beklenecek saniyeyi belirler.
+//! `STARFILE_SCREENSHOT_INPUT=click:820,130;key:F1` görüntüden önce sırayla tıklar ve tuşa basar
 //! (bir menüyü ya da pencereyi açık göstermek için). Modifier chords are written as
 //! `ctrl+key:K` / `shift+key:Tab`, and `type:report` injects typed text.
 
@@ -25,20 +25,20 @@ struct Shot {
 static SHOT: Mutex<Option<Shot>> = Mutex::new(None);
 
 pub fn init() {
-    let Some(path) = std::env::var_os("SWIFT_EXPLORER_SCREENSHOT") else {
+    let Some(path) = std::env::var_os("STARFILE_SCREENSHOT") else {
         return;
     };
-    let delay = std::env::var("SWIFT_EXPLORER_SCREENSHOT_DELAY")
+    let delay = std::env::var("STARFILE_SCREENSHOT_DELAY")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(4.0);
-    let size = std::env::var("SWIFT_EXPLORER_SCREENSHOT_SIZE")
+    let size = std::env::var("STARFILE_SCREENSHOT_SIZE")
         .ok()
         .and_then(|s| {
             let (w, h) = s.split_once('x')?;
             Some(egui::vec2(w.parse().ok()?, h.parse().ok()?))
         });
-    let input = std::env::var("SWIFT_EXPLORER_SCREENSHOT_INPUT")
+    let input = std::env::var("STARFILE_SCREENSHOT_INPUT")
         .map(|s| s.split(';').rev().map(str::to_string).collect())
         .unwrap_or_default();
     let now = Instant::now();

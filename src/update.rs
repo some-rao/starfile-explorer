@@ -10,7 +10,7 @@ use sha2::{Digest, Sha256};
 
 /// Her sürümle yayınlanan bilgi dosyası. API'ye gitmediği için istek sınırına takılmaz.
 const LATEST: &str =
-    "https://github.com/misutesu-desu/swift-explorer/releases/latest/download/latest.json";
+    "https://github.com/some-rao/starfile-explorer/releases/latest/download/latest.json";
 
 /// Güncellemeyi kuran gizli süreç bu bayrakla yeni sürümü başlatır; yeni süreç
 /// eskisinin çıkmasını bekleyip arka planda bekler.
@@ -82,7 +82,7 @@ fn agent() -> ureq::Agent {
 
 /// Son sürümü denetler, Windows'ta kurar. Yeni sürüm yoksa `None`.
 pub fn check() -> Result<Option<Found>, String> {
-    let ua = format!("SwiftExplorer/{}", env!("CARGO_PKG_VERSION"));
+    let ua = format!("StarFile/{}", env!("CARGO_PKG_VERSION"));
     let mut body = Vec::new();
     agent()
         .get(LATEST)
@@ -257,11 +257,12 @@ mod tests {
     #[test]
     #[ignore]
     fn install_swaps_the_exe() {
-        let url = "https://github.com/misutesu-desu/swift-explorer/releases/download/v0.5.0/SwiftExplorer.exe";
+        let url =
+            "https://github.com/some-rao/starfile-explorer/releases/download/v0.5.0/StarFile.exe";
         let sha = "c04b3d39eb220c5958bfb0754977e5dd0891206f0808889b244fb3b01ddca3ee";
         let dir = std::env::temp_dir().join(format!("swift-update-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let exe = dir.join("SwiftExplorer.exe");
+        let exe = dir.join("StarFile.exe");
         std::fs::write(&exe, b"old").unwrap();
 
         assert!(install(&exe, url, &"0".repeat(64), "test").is_err());
@@ -278,7 +279,7 @@ mod tests {
     fn rolls_back_after_two_failed_starts() {
         let dir = std::env::temp_dir().join(format!("swift-rollback-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let exe = dir.join("SwiftExplorer.exe");
+        let exe = dir.join("StarFile.exe");
         std::fs::write(&exe, b"new").unwrap();
         std::fs::write(with_ext(&exe, ".old"), b"old").unwrap();
         std::fs::write(with_ext(&exe, ".pending"), "0").unwrap();

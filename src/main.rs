@@ -32,12 +32,14 @@ mod wsl;
 
 use std::path::PathBuf;
 
-pub const APP_NAME: &str = "Swift Explorer";
+pub const APP_NAME: &str = "StarFile Explorer";
 /// Wayland/X11 pencere kimliği; `.desktop` dosyasının adıyla aynı olmalı ki masaüstü ikonu ve adı eşleştirsin
-pub const APP_ID: &str = "io.github.misutesu_desu.SwiftExplorer";
+pub const APP_ID: &str = "io.github.some_rao.StarFile";
 
 fn main() -> eframe::Result<()> {
     diag::install();
+    // Eski adla (Swift Explorer) yazılmış ayarları devral; pencere açılmadan önce
+    app::migrate_legacy_config();
     // Pencere oluşmadan: monitör başına DPI ve görev çubuğu kimliği
     system::apply_dpi_awareness();
     system::set_app_id();

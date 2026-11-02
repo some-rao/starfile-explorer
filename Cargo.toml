@@ -1,10 +1,10 @@
 [package]
-name = "swift-explorer"
-version = "0.7.0"
+name = "starfile"
+version = "0.8.0"
 edition = "2021"
 description = "A file manager for Windows and Linux that looks and works like the Windows 11 File Explorer"
 license = "MIT"
-repository = "https://github.com/misutesu-desu/swift-explorer"
+repository = "https://github.com/some-rao/starfile-explorer"
 readme = "README.md"
 rust-version = "1.82"
 

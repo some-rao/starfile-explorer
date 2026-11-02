@@ -1,4 +1,4 @@
-# Swift Explorer: run, test and build helpers.
+# StarFile Explorer: run, test and build helpers.
 #
 #   make run           run the app (release); ARGS="/some/dir" opens a folder
 #   make build         build portable packages for every OS and architecture into output/
@@ -9,13 +9,13 @@
 
 SHELL := /bin/bash
 
-APP     := swift-explorer
+APP     := starfile
 VERSION := $(shell sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
 OUT     := output
 CACHE   := .cache
 VENV    := $(CACHE)/venv
 STAGE   := $(CACHE)/stage
-APP_ID  := io.github.misutesu_desu.SwiftExplorer
+APP_ID  := io.github.some_rao.StarFile
 
 # Zig is installed from PyPI into a private venv; cargo-zigbuild finds it through PATH.
 export PATH := $(CURDIR)/$(VENV)/bin:$(PATH)
@@ -95,10 +95,10 @@ define windows_package
 $(OUT)/$(APP)-$(VERSION)-$(call label,$(1))-portable.zip: $(SOURCES) | tools
 	rustup target add $(1)
 	WINDRES=$(CURDIR)/packaging/build/windres-zig AR=ar cargo zigbuild --release --target $(1)
-	rm -rf $(STAGE)/$(1) && mkdir -p $(STAGE)/$(1)/SwiftExplorer $(OUT)
-	cp target/$(1)/release/$(APP).exe $(STAGE)/$(1)/SwiftExplorer/SwiftExplorer.exe
-	cp LICENSE $(STAGE)/$(1)/SwiftExplorer/
-	rm -f $$@ && cd $(STAGE)/$(1) && zip -qr $(CURDIR)/$$@ SwiftExplorer
+	rm -rf $(STAGE)/$(1) && mkdir -p $(STAGE)/$(1)/StarFile $(OUT)
+	cp target/$(1)/release/$(APP).exe $(STAGE)/$(1)/StarFile/StarFile.exe
+	cp LICENSE $(STAGE)/$(1)/StarFile/
+	rm -f $$@ && cd $(STAGE)/$(1) && zip -qr $(CURDIR)/$$@ StarFile
 endef
 
 $(foreach t,$(LINUX_TARGETS),$(eval $(call linux_package,$(t))))

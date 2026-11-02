@@ -1,10 +1,10 @@
-id: io.github.misutesu_desu.SwiftExplorer
+id: io.github.some_rao.StarFile
 runtime: org.gnome.Platform
 runtime-version: '49'
 sdk: org.gnome.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
-command: swift-explorer
+command: starfile
 finish-args:
   - --share=ipc
   - --socket=wayland
@@ -19,17 +19,17 @@ finish-args:
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
   env:
-    CARGO_HOME: /run/build/swift-explorer/cargo
+    CARGO_HOME: /run/build/starfile/cargo
 modules:
-  - name: swift-explorer
+  - name: starfile
     buildsystem: simple
     build-commands:
       - cargo --offline fetch --manifest-path Cargo.toml --verbose
       - cargo --offline build --release --verbose
-      - install -Dm755 target/release/swift-explorer /app/bin/swift-explorer
-      - install -Dm644 packaging/linux/io.github.misutesu_desu.SwiftExplorer.desktop /app/share/applications/io.github.misutesu_desu.SwiftExplorer.desktop
-      - install -Dm644 packaging/linux/io.github.misutesu_desu.SwiftExplorer.metainfo.xml /app/share/metainfo/io.github.misutesu_desu.SwiftExplorer.metainfo.xml
-      - install -Dm644 assets/icon.png /app/share/icons/hicolor/256x256/apps/io.github.misutesu_desu.SwiftExplorer.png
+      - install -Dm755 target/release/starfile /app/bin/starfile
+      - install -Dm644 packaging/linux/io.github.some_rao.StarFile.desktop /app/share/applications/io.github.some_rao.StarFile.desktop
+      - install -Dm644 packaging/linux/io.github.some_rao.StarFile.metainfo.xml /app/share/metainfo/io.github.some_rao.StarFile.metainfo.xml
+      - install -Dm644 assets/icon.png /app/share/icons/hicolor/256x256/apps/io.github.some_rao.StarFile.png
     sources:
       # Flathub builds from a tagged git source instead; see packaging/flatpak/README.md
       - type: dir

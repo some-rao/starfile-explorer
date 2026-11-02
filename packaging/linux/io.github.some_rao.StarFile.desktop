@@ -1,16 +1,16 @@
 [Desktop Entry]
 Type=Application
-Name=Swift Explorer
+Name=StarFile Explorer
 GenericName=File Manager
 GenericName[tr]=Dosya Yöneticisi
 Comment=A file manager that looks and works like the Windows 11 File Explorer
 Comment[tr]=Windows 11 Dosya Gezgini gibi görünen ve çalışan bir dosya yöneticisi
-Exec=swift-explorer %f
-Icon=io.github.misutesu_desu.SwiftExplorer
+Exec=starfile %f
+Icon=io.github.some_rao.StarFile
 Terminal=false
 Categories=System;FileTools;FileManager;
 Keywords=folder;files;explorer;browser;
 Keywords[tr]=klasör;dosya;gezgin;
 MimeType=inode/directory;
 StartupNotify=true
-StartupWMClass=io.github.misutesu_desu.SwiftExplorer
+StartupWMClass=io.github.some_rao.StarFile

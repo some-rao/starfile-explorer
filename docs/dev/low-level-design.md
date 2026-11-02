@@ -1,4 +1,4 @@
-# Low-level design reference — Swift Explorer
+# Low-level design reference — StarFile Explorer
 
 Per-file reference for the code as of `v0.7.0` (`850c108`); sections touched by later work are marked
 "line numbers are indicative". Use this to avoid re-reading `app.rs`.
@@ -34,7 +34,7 @@ Read first: [`architecture.md`](architecture.md) (layers/state), [`workflows.md`
 ### 1.2 `Config` (28-91)
 
 Fields and values: see [`architecture.md` §9.1](architecture.md#91-config-json-the-only-app-owned-state).
-`load_config` (85-91) tries `SwiftExplorer/config.json`, then `HizliGezgin/config.json` (220-222), then
+`load_config` (85-91) tries `StarFile/config.json`, then `HizliGezgin/config.json` (220-222), then
 `Config::default()`. `save_config` (1177-1209) writes pretty JSON only when the text changed.
 
 ### 1.3 `App` field groups (297-376)
@@ -406,7 +406,7 @@ Windows implementation notes:
   optional `ICONONLY`) → HBITMAP → `GetDIBits` 32-bit top-down BGRA → RGBA; JPEG alpha forced opaque,
   straight alpha premultiplied in gamma space (`S:49-121`).
 - Worker threads call `CoInitializeEx(COINIT_APARTMENTTHREADED)` (`S:142-146`).
-- Cloak: `WH_CBT` hook matches the top-level window titled exactly `Swift Explorer`; subclass id `0x5345`;
+- Cloak: `WH_CBT` hook matches the top-level window titled exactly `StarFile Explorer`; subclass id `0x5345`;
   uncloak via `DWMWA_CLOAK` (`S:184-269`).
 - Resize: `WM_NCHITTEST` subclass id `0x4847`, 6 px × DPI band, disabled when maximized (`S:273-334`).
 - Native menu: PIDLs → `IShellItemArray` → `IContextMenu`; thread-local `ACTIVE_MENU`; message forwarding
@@ -431,10 +431,10 @@ Windows:
 
 - Drives: `GetLogicalDrives`, `GetDriveTypeW`, volume label → `"Label (C:)"`, free/total (`W:31-82`).
 - Clipboard: `clipboard-win` CF_HDROP + `Preferred DropEffect` (`W:169-209`).
-- Single instance: pipe `\\.\pipe\SwiftExplorer-<session>-<USERNAME>`; `FILE_FLAG_FIRST_PIPE_INSTANCE`;
+- Single instance: pipe `\\.\pipe\StarFile-<session>-<USERNAME>`; `FILE_FLAG_FIRST_PIPE_INSTANCE`;
   message = u32 byte length + UTF-16LE path; reply byte 1 = accepted; `AllowSetForegroundWindow(ASFW_ANY)`
   (`W:236-340`).
-- Autostart: HKCU `…\Run\SwiftExplorer = "<exe>" --background`; existence-only check (`W:363-385`).
+- Autostart: HKCU `…\Run\StarFile = "<exe>" --background`; existence-only check (`W:363-385`).
 - Default FM: HKCU `Directory\shell`, `Drive\shell`, Win+E CLSID; uninstall is destructive and does not
   restore the previous handler (`W:389-469`).
 - Properties: `ShellExecuteExW` verb `properties` with `SEE_MASK_INVOKEIDLIST` (`W:93-105`).
@@ -516,7 +516,7 @@ Limits: manifest ≤64 KiB, exe ≤256 MiB, 10 s connect / 30 s read timeouts, n
   `_SIZE` (`WxH`), `_INPUT` (`click:x,y;key:F1`, every 500 ms from 1.5 s). Writes a 32-bit top-down BMP and
   closes (`screenshot.rs:1-8`, `74-122`).
 - `build.rs`: Windows only; icon `assets/icon.ico`; for `CARGO_CFG_TARGET_ENV == "gnu"` (also gnullvm)
-  embeds `packaging/windows/swift-explorer.manifest` (asInvoker, Common Controls 6, supportedOS GUIDs).
+  embeds `packaging/windows/starfile.manifest` (asInvoker, Common Controls 6, supportedOS GUIDs).
   MSVC relies on the linker manifest; without one `SetWindowSubclass` fails.
 
 ---
@@ -617,11 +617,11 @@ automatically (`A:2636-2649`); `theme = index + 3` is persisted.
 
 ### Recipe: reset local state while debugging
 
-- Settings: delete `%APPDATA%\SwiftExplorer\config.json` (or set a different `APPDATA` for a scratch run).
-- Window geometry / first-run behaviour: delete `app.ron` from eframe's storage dir for `Swift Explorer`.
+- Settings: delete `%APPDATA%\StarFile\config.json` (or set a different `APPDATA` for a scratch run).
+- Window geometry / first-run behaviour: delete `app.ron` from eframe's storage dir for `StarFile Explorer`.
 - Update markers: `.new`, `.old`, `.bad`, `.pending`, `.skip` next to the exe; delete `.pending` first if a
   rollback loop is suspected.
-- Single instance: make sure no hidden process is parked (`Stop-Process -Name swift-explorer`).
+- Single instance: make sure no hidden process is parked (`Stop-Process -Name starfile`).
 - Screenshots: `cargo run --features screenshot` with `SWIFT_EXPLORER_SCREENSHOT=…`.
 
 ---

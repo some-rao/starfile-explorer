@@ -1276,8 +1276,7 @@ mod tests {
     #[cfg(not(windows))]
     #[test]
     fn tree_stats_count_files_dirs_and_size() {
-        let root =
-            std::env::temp_dir().join(format!("swift-explorer-props-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("starfile-props-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(root.join("a/b")).unwrap();
         fs::write(root.join("one.txt"), [0u8; 10]).unwrap();
@@ -1409,7 +1408,7 @@ mod tests {
 
     #[test]
     fn copy_waits_for_disk_and_keeps_read_only_files() {
-        let root = std::env::temp_dir().join(format!("swift-explorer-sync-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("starfile-sync-{}", std::process::id()));
         let (src, dest) = (root.join("src"), root.join("dest"));
         fs::create_dir_all(src.join("klasör")).unwrap();
         fs::create_dir_all(&dest).unwrap();

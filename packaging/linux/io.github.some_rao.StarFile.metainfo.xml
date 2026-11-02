@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>io.github.misutesu_desu.SwiftExplorer</id>
+  <id>io.github.some_rao.StarFile</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
-  <name>Swift Explorer</name>
+  <name>StarFile Explorer</name>
   <summary>File manager in the style of the Windows 11 File Explorer</summary>
-  <developer id="io.github.misutesu_desu">
-    <name>misutesu-desu</name>
+  <developer id="io.github.some_rao">
+    <name>some-rao</name>
   </developer>
   <description>
     <p>
-      Swift Explorer looks and behaves like the Windows 11 File Explorer: tabs in the title bar,
+      StarFile Explorer looks and behaves like the Windows 11 File Explorer: tabs in the title bar,
       an address bar with breadcrumbs, a navigation pane and the same keyboard shortcuts.
     </p>
     <p>
@@ -18,21 +18,21 @@
       and search runs across subfolders in parallel.
     </p>
   </description>
-  <launchable type="desktop-id">io.github.misutesu_desu.SwiftExplorer.desktop</launchable>
-  <url type="homepage">https://github.com/misutesu-desu/swift-explorer</url>
-  <url type="bugtracker">https://github.com/misutesu-desu/swift-explorer/issues</url>
+  <launchable type="desktop-id">io.github.some_rao.StarFile.desktop</launchable>
+  <url type="homepage">https://github.com/some-rao/starfile-explorer</url>
+  <url type="bugtracker">https://github.com/some-rao/starfile-explorer/issues</url>
   <screenshots>
     <screenshot type="default">
       <caption>Large icons, grouped by date</caption>
-      <image>https://raw.githubusercontent.com/misutesu-desu/swift-explorer/main/docs/large-icons.png</image>
+      <image>https://raw.githubusercontent.com/some-rao/starfile-explorer/main/docs/large-icons.png</image>
     </screenshot>
     <screenshot>
       <caption>Details view</caption>
-      <image>https://raw.githubusercontent.com/misutesu-desu/swift-explorer/main/docs/details.png</image>
+      <image>https://raw.githubusercontent.com/some-rao/starfile-explorer/main/docs/details.png</image>
     </screenshot>
     <screenshot>
       <caption>Light theme</caption>
-      <image>https://raw.githubusercontent.com/misutesu-desu/swift-explorer/main/docs/light.png</image>
+      <image>https://raw.githubusercontent.com/some-rao/starfile-explorer/main/docs/light.png</image>
     </screenshot>
   </screenshots>
   <content_rating type="oars-1.1"/>
@@ -70,7 +70,7 @@
           <li>View &gt; Theme has Catppuccin, Gruvbox, Everforest, Nord, Dracula, Tokyo Night, Rosé Pine and Solarized.</li>
           <li>A copy or move finishes only after the files reach the disk, and a message says when the drive can be removed.</li>
           <li>Moving to another drive deletes the originals only after that.</li>
-          <li>On Windows, files can be dragged onto a window that sits on top of Swift Explorer or was brought forward with Alt+Tab.</li>
+          <li>On Windows, files can be dragged onto a window that sits on top of StarFile Explorer or was brought forward with Alt+Tab.</li>
         </ul>
       </description>
     </release>

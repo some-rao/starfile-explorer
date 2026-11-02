@@ -327,7 +327,7 @@ pub fn peek_file(_path: &Path) -> bool {
 
 // ---------- Varsayılan dosya yöneticisi: klasörler bu uygulamada açılır
 
-const DESKTOP_ID: &str = "io.github.misutesu_desu.SwiftExplorer.desktop";
+const DESKTOP_ID: &str = "io.github.some_rao.StarFile.desktop";
 
 pub fn is_default_file_manager() -> bool {
     default_app_id("inode/directory").as_deref() == Some(DESKTOP_ID)

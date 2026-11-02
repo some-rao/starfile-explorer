@@ -128,7 +128,35 @@ impl Default for Config {
 }
 
 fn config_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("SwiftExplorer").join("config.json"))
+    dirs::config_dir().map(|d| d.join("StarFile").join("config.json"))
+}
+
+/// Ayarları eski adla (`%APPDATA%\SwiftExplorer`) yazılmış kurulumdan devralır.
+///
+/// Kopyalar, taşımaz: eski sürüm hâlâ kuruluysa kendi ayarlarıyla çalışmaya devam
+/// eder. Hedef klasör varsa hiçbir şey yapılmaz, böylece sonradan yapılan
+/// değişiklikler ezilmez. Bir kez, pencere açılmadan önce çağrılır.
+pub fn migrate_legacy_config() {
+    let Some(config_dir) = dirs::config_dir() else {
+        return;
+    };
+    let new = config_dir.join("StarFile");
+    if new.exists() {
+        return;
+    }
+    let old = config_dir.join("SwiftExplorer");
+    let Ok(entries) = std::fs::read_dir(&old) else {
+        return;
+    };
+    if std::fs::create_dir_all(&new).is_err() {
+        return;
+    }
+    for entry in entries.flatten() {
+        let src = entry.path();
+        if src.is_file() {
+            let _ = std::fs::copy(&src, new.join(entry.file_name()));
+        }
+    }
 }
 
 fn load_config() -> Config {
@@ -332,9 +360,14 @@ pub fn prefetch_startup(start: Option<PathBuf>) {
     });
 }
 
-/// Uygulamanın eski adıyla (Hızlı Gezgin) kaydedilmiş ayarlar; yeni dosya yoksa bunlar okunur
+/// Uygulamanın eski adlarıyla (Swift Explorer, Hızlı Gezgin) kaydedilmiş ayarlar;
+/// yeni dosya yoksa bunlar okunur
 fn legacy_config_path() -> Option<PathBuf> {
-    dirs::config_dir().map(|d| d.join("HizliGezgin").join("config.json"))
+    let dir = dirs::config_dir()?;
+    ["SwiftExplorer", "HizliGezgin"]
+        .iter()
+        .map(|name| dir.join(name).join("config.json"))
+        .find(|path| path.exists())
 }
 
 // ---------------------------------------------------------------- eylemler/diyaloglar
@@ -1013,8 +1046,10 @@ fn pal_of(ui: &egui::Ui) -> Pal {
 
 /// Dil ayarını uygular (0 = Windows diline göre, n = `i18n::LANGS` içindeki n-1. dil)
 fn apply_lang(lang: u8) {
-    // SWIFT_EXPLORER_LANG=en|tr|de|… ayarı geçersiz kılar (test ve kısayol için)
-    let forced = std::env::var("SWIFT_EXPLORER_LANG")
+    // STARFILE_LANG=en|tr|de|… ayarı geçersiz kılar (test ve kısayol için).
+    // Eski ad (SWIFT_EXPLORER_LANG) kısayollarda kalmış olabilir, o da okunur.
+    let forced = std::env::var("STARFILE_LANG")
+        .or_else(|_| std::env::var("SWIFT_EXPLORER_LANG"))
         .ok()
         .and_then(|c| crate::i18n::lang_index(&c));
     crate::i18n::set_lang(match (forced, lang) {
@@ -1974,7 +2009,7 @@ impl App {
                     self.update_installed = true;
                     self.toast(
                         crate::i18n::tf(
-                            "Swift Explorer {} yüklendi. Pencereyi kapatınca yeni sürüme geçilir.",
+                            "StarFile Explorer {} yüklendi. Pencereyi kapatınca yeni sürüme geçilir.",
                             &[&v],
                         ),
                         false,
@@ -8565,7 +8600,7 @@ impl eframe::App for App {
 
         let t = &self.tabs[self.active];
         let title = format!(
-            "{} — Swift Explorer",
+            "{} — StarFile Explorer",
             if t.is_home() {
                 self.loc_name(&t.path)
             } else {

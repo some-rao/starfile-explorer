@@ -1,6 +1,6 @@
-# AGENTS.md — Swift Explorer (development orientation)
+# AGENTS.md — StarFile Explorer (development orientation)
 
-`Swift Explorer` is a **Rust + egui/eframe** desktop file manager that clones the look and behaviour of
+`StarFile Explorer` is a **Rust + egui/eframe** desktop file manager that clones the look and behaviour of
 Windows 11 File Explorer. ~10k lines of Rust in `src/*.rs`, plus one translation table per language in
 `src/i18n/`. Windows is the primary target (Win32 shell
 integration); Linux is a supported but less-complete port (`shell_unix.rs`, `win_unix.rs`).
@@ -22,7 +22,7 @@ Upstream repo docs: `README.md` (features, build), `CONTRIBUTING.md` (PR rules),
 
 ```powershell
 cargo run                 # debug binary; ~8 min cold build, seconds warm
-cargo build --release     # target\release\swift-explorer.exe (LTO thin, strip)
+cargo build --release     # target\release\starfile.exe (LTO thin, strip)
 cargo test                # unit tests; also fails if any i18n table is out of sync
 cargo fmt --all
 cargo clippy --all-targets

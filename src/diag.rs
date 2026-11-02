@@ -3,7 +3,7 @@
 //! A Windows release build is compiled with `windows_subsystem = "windows"`, so
 //! a panic message would otherwise disappear with the window. The hook
 //! installed here writes the panic, its location, a backtrace and the recent
-//! diagnostic trail to `%APPDATA%\SwiftExplorer\panic.log`, and the trail says
+//! diagnostic trail to `%APPDATA%\StarFile\panic.log`, and the trail says
 //! which palette transition the app was in when it died.
 
 use std::path::PathBuf;
@@ -24,11 +24,11 @@ pub fn log(event: impl AsRef<str>) {
     }
 }
 
-/// `%APPDATA%\SwiftExplorer\panic.log`, or the temp directory as a fallback.
+/// `%APPDATA%\StarFile\panic.log`, or the temp directory as a fallback.
 pub fn log_path() -> PathBuf {
     dirs::config_dir()
-        .map(|dir| dir.join("SwiftExplorer").join("panic.log"))
-        .unwrap_or_else(|| std::env::temp_dir().join("swift-explorer-panic.log"))
+        .map(|dir| dir.join("StarFile").join("panic.log"))
+        .unwrap_or_else(|| std::env::temp_dir().join("starfile-panic.log"))
 }
 
 /// Installs the panic hook. Call once, before any window is created.
@@ -37,7 +37,7 @@ pub fn install() {
     std::panic::set_hook(Box::new(move |info| {
         let mut report = String::new();
         report.push_str(&format!(
-            "swift-explorer {} ({}) at {}\n",
+            "starfile {} ({}) at {}\n",
             env!("CARGO_PKG_VERSION"),
             if cfg!(debug_assertions) {
                 "debug"

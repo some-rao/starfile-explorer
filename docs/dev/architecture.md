@@ -1,7 +1,7 @@
-# Architecture — Swift Explorer
+# Architecture — StarFile Explorer
 
-Snapshot: `v0.7.0`, commit `850c108`, fork `some-rao/swift-explorer` (upstream
-`misutesu-desu/swift-explorer`). All line references are relative to the repo root at that commit.
+Snapshot: `v0.7.0`, commit `850c108`, fork `some-rao/starfile` (upstream
+`some-rao/starfile-explorer`). All line references are relative to the repo root at that commit.
 
 Companion docs: [`workflows.md`](workflows.md) (end-to-end dataflow),
 [`low-level-design.md`](low-level-design.md) (per-file API reference and traps).
@@ -16,7 +16,7 @@ rendering, no web view, no Tauri/Electron.
 
 | Property | Value |
 |---|---|
-| Crate | `swift-explorer` 0.7.0, edition 2021, MSRV 1.82 (`Cargo.toml:1-9`) |
+| Crate | `starfile` 0.7.0, edition 2021, MSRV 1.82 (`Cargo.toml:1-9`) |
 | UI | `eframe`/`egui`/`egui_extras` 0.31 with `persistence` |
 | Concurrency | `std::thread` + `mpsc`, `rayon` for bulk sort/search/size |
 | FS | `std::fs`, `trash` (Recycle Bin/XDG trash), `notify` (watcher) |
@@ -41,7 +41,7 @@ Non-obvious decisions that shape everything:
 ## 2. Process model
 
 ```
-swift-explorer.exe [path]
+starfile.exe [path]
    │
    ├─ Windows: is another instance serving a named pipe?
    │     ├─ yes + hidden (parked) window → forward path, this process exits   (win.rs:245-254)
@@ -54,7 +54,7 @@ swift-explorer.exe [path]
 
 - **Windows** keeps a resident process alive after the window is closed when View → "Wait in the
   background" is on (`App.resident && background`): close is cancelled and the window is hidden
-  (`app.rs:4331-4335`, `win.rs:343-346`). A later launch is forwarded over `\\.\pipe\SwiftExplorer-<session>-<user>`
+  (`app.rs:4331-4335`, `win.rs:343-346`). A later launch is forwarded over `\\.\pipe\StarFile-<session>-<user>`
   (`win.rs:236-241`) and the hidden window is re-shown (`win.rs:311-340`).
 - **Linux** has no resident mode: `win_unix::serve` returns `false` (`win_unix.rs:278-280`), so every launch
   is a new process.
@@ -84,7 +84,7 @@ swift-explorer.exe [path]
 | `src/wsl.rs` | ~75 | WSL distro discovery (`wsl.exe --list --quiet`, UTF-16LE fallback, 10 s cache) | Windows (stub elsewhere) |
 | `src/newfile.rs` | ~370 | "New" submenu document templates (other contributors' feature) | always |
 | `src/git.rs` | ~215 | Repository info: branch from `.git/HEAD`, file statuses via `git status --porcelain=v2` | always |
-| `src/diag.rs` | ~60 | Console-less crash diagnostics (`%APPDATA%\SwiftExplorer\panic.log` + event trail) | always |
+| `src/diag.rs` | ~60 | Console-less crash diagnostics (`%APPDATA%\StarFile\panic.log` + event trail) | always |
 | `src/shell.rs` | ~980 | Win32: `IShellItemImageFactory` icons, shell verb tree, type names, native context menu, OLE drag-out, DWM cloak, resize subclass | Windows |
 | `src/shell_unix.rs` | ~275 | freedesktop icons (theme lookup, SVG via resvg, `image` thumbnails), type names, stubs | non-Windows |
 | `src/win.rs` | ~630 | Win32: drives, clipboard (CF_HDROP), single instance, autostart, default file manager, properties, terminals, DWM accent | Windows |
@@ -96,7 +96,7 @@ swift-explorer.exe [path]
 | `src/scheme.rs` | ~210 | 12 colour schemes + process-global active scheme | always |
 | `src/screenshot.rs` | ~190 | Feature-gated self-screenshot/input harness (`click:`, `hover:`, `rclick:`) | `feature = "screenshot"` |
 | `build.rs` | 13 | Embeds icon/manifest for GNU Windows targets via `winresource` | build script |
-| `packaging/windows/swift-explorer.iss` | — | Inno Setup per-user installer/uninstaller (Start Menu, optional desktop shortcut, AUMID) | installer only |
+| `packaging/windows/starfile.iss` | — | Inno Setup per-user installer/uninstaller (Start Menu, optional desktop shortcut, AUMID) | installer only |
 | `src/i18n/{de,es,fr,pt,ru,zh,ja}.rs` | ~20 KB each | One table per language, key = Turkish source string | always |
 
 `main.rs` wires platform files by *path aliasing*, not traits:
@@ -155,7 +155,7 @@ new ones if avoidable.
    - hand off to a resident instance (`win::hand_off`); exit if accepted;
    - `update::startup_guard()` (rollback logic);
    - `first_run` = no `app.ron` in eframe storage dir → open maximized (`main.rs:48`);
-   - window: borderless, 1060×640, min 640×400, app id `io.github.misutesu_desu.SwiftExplorer`, DnD on;
+   - window: borderless, 1060×640, min 640×400, app id `io.github.some_rao.StarFile`, DnD on;
    - Windows: `shell::begin_startup_cloak()` installs a `WH_CBT` hook to DWM-cloak the window at creation
      (`shell.rs:191-250`), preventing a white flash before the GL surface is ready;
    - `app::prefetch_startup(start)` then `eframe::run_native`.
@@ -297,7 +297,7 @@ The only generation-like guard is `show_hidden` carried with subdir results.
 
 ### 9.1 Config JSON (the only app-owned state)
 
-`dirs::config_dir()/SwiftExplorer/config.json` → Windows `%APPDATA%\SwiftExplorer\config.json`
+`dirs::config_dir()/StarFile/config.json` → Windows `%APPDATA%\StarFile\config.json`
 (`app.rs:81-83`). Legacy fallback: `%APPDATA%\HizliGezgin\config.json` (`app.rs:220-222`).
 Serialized pretty JSON, rewritten only when the string changes (`app.rs:1202-1206`). Every field is
 `#[serde(default)]`, corrupt JSON silently falls back to `Config::default()` (`app.rs:85-91`).
@@ -324,7 +324,7 @@ Writes: every 3 s autosave, on park/close, on bookmark add/remove, `on_exit`.
 
 ### 9.2 `app.ron` (eframe-owned)
 
-eframe's `FileStorage` writes `app.ron` under `eframe::storage_dir("Swift Explorer")` with the window
+eframe's `FileStorage` writes `app.ron` under `eframe::storage_dir("StarFile Explorer")` with the window
 settings (`STORAGE_WINDOW_KEY = "window"`) and egui memory. The app never calls `get_value`/`set_value`,
 and `App` does not override `save()`. Window geometry restore is entirely eframe's.
 Its existence is used as the "not first run → don't force maximize" heuristic (`main.rs:48`).
@@ -376,7 +376,7 @@ two files per module must expose matching names/signatures.
 | `clipboard_set_files(paths, cut)` / `clipboard_get_files()` | `CF_HDROP` + `Preferred DropEffect` | newline-separated absolute paths as text |
 | `note_paste_text`, `files_as_text` | **absent** | helpers for text-clipboard emulation |
 | `hand_off`, `is_serving`, `serve`, `park`, `take_parked`, `take_reopen` | named-pipe single instance + hidden window | all no-ops / `false` |
-| `autostart`, `set_autostart` | HKCU `Run` value `SwiftExplorer` (`win.rs:363-385`) | no-ops |
+| `autostart`, `set_autostart` | HKCU `Run` value `StarFile` (`win.rs:363-385`) | no-ops |
 | `is_default_file_manager`, `set_default_file_manager(on, previous)` | HKCU `Directory\shell`, `Drive\shell`, Win+E CLSID (`win.rs:389-469`) | `xdg-mime default`, returns previous id |
 | `mount_roots`, `mime_of`, `default_app_id`, `default_app`, `host_command` | **absent** | Linux-only helpers |
 
@@ -493,19 +493,19 @@ Known asymmetries (do not "fix" by assuming symmetry): `open_terminal` returns `
 
 ## 13. Build, packaging, release
 
-- **Local build**: `cargo build --release` → `target/release/swift-explorer.exe`; the exe embeds the icon
+- **Local build**: `cargo build --release` → `target/release/starfile.exe`; the exe embeds the icon
   and, for GNU targets, a manifest via `build.rs` (`asInvoker`, Common Controls 6, supportedOS GUIDs).
 - **`Makefile`** (bash only) adds `run/dev/test/check/fmt/lint`, portable packages, checksums, and
   cross-compilation with `cargo-zigbuild` + Zig installed into `.cache/venv` via pip. Targets: Linux
   `x86_64`/`aarch64` (glibc 2.17), Windows `x86_64`/`i686` (GNU) and `aarch64` (gnullvm).
 - **CI** (`.github/workflows/build.yml`): matrix `windows-latest` + `ubuntu-22.04`, `cargo build --release`,
-  artifacts `SwiftExplorer.exe` and `swift-explorer-linux-x86_64.tar.gz`; on tags `v*`, a `manifest` job
+  artifacts `StarFile.exe` and `starfile-linux-x86_64.tar.gz`; on tags `v*`, a `manifest` job
   generates `latest.json` (`{version, page, windows:{url, sha256}}`) and attaches everything to the release;
   `flatpak-sources` + `flatpak` jobs build the Flatpak bundle.
 - **Linux install**: `install.sh` downloads the tarball, installs binary + icon + `.desktop` + metainfo into
   XDG dirs (no checksum verification). Flatpak manifest in `packaging/flatpak/`.
 - **Version bump locations**: `Cargo.toml` (source of `CARGO_PKG_VERSION`), git tag (drives `latest.json`),
-  newest `<release>` in `packaging/linux/io.github.misutesu_desu.SwiftExplorer.metainfo.xml`.
+  newest `<release>` in `packaging/linux/io.github.some_rao.StarFile.metainfo.xml`.
 
 Self-update mechanics: see [`workflows.md#17-self-update`](workflows.md#17-self-update).
 

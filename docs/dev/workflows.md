@@ -1,4 +1,4 @@
-# Workflows & dataflow — Swift Explorer
+# Workflows & dataflow — StarFile Explorer
 
 End-to-end traces for every user-visible feature. Read
 [`architecture.md`](architecture.md) first for the module/state model.
@@ -49,7 +49,7 @@ Key points:
 ## 2. Second launch, resident process, background mode (Windows)
 
 ```
-launch 2 ──open \\.\pipe\SwiftExplorer-<session>-<user>──► resident server thread (W:283-308)
+launch 2 ──open \\.\pipe\StarFile-<session>-<user>──► resident server thread (W:283-308)
              write u32 length + UTF-16LE path, AllowSetForegroundWindow
                                                     │
                             PARKED != 0 ? ──yes──► REOPEN = Some(path?) ; cloak; ShowWindow; SetForegroundWindow
@@ -452,9 +452,9 @@ autosave every 3 s, on park, on bookmark change and on exit.
 
 1. Bump `Cargo.toml` version, add an AppStream `<release>` entry, commit.
 2. Tag `vX.Y.Z` and push; CI builds Windows (MSVC) + Linux, packages, attaches artifacts.
-3. `manifest` job derives the version from the tag (not `Cargo.toml`), hashes `SwiftExplorer.exe`, writes
+3. `manifest` job derives the version from the tag (not `Cargo.toml`), hashes `StarFile.exe`, writes
    `latest.json`, attaches it.
-4. Flatpak jobs regenerate `cargo-sources.json` from `Cargo.lock` and build `swift-explorer.flatpak`.
+4. Flatpak jobs regenerate `cargo-sources.json` from `Cargo.lock` and build `starfile.flatpak`.
 5. Scoop bucket bumps are external.
 
 ---
@@ -493,7 +493,7 @@ These were added after the 0.7.0 docs pass; line anchors in sections 1-19 may ha
 | **Modern context menu** | right-click → `ShellMenu::build` → allowlisted `menu::Node` tree → `menu::show`; "Show more options" → native classic menu (see §13) |
 | **Gallery** | sidebar row → `GALLERY` sentinel → `fx::spawn_gallery` (Pictures tree, images+videos, 5000 cap) → forced modified-desc + month/year groups → Quick Look works; search roots = Pictures |
 | **WSL** | `wsl::distros()` (UTF-8/UTF-16LE, 10 s cache) → "Linux" sidebar node → `\\wsl.localhost\<distro>` through the normal directory pipeline |
-| **Installer** | `packaging/windows/swift-explorer.iss`: per-user Inno Setup, Start Menu shortcut, optional desktop shortcut, AUMID `SwiftExplorer.App`, uninstaller; `swift-explorer.exe --uninstall-cleanup` removes autostart/registry leftovers. Self-update and portable zip stay supported |
+| **Installer** | `packaging/windows/starfile.iss`: per-user Inno Setup, Start Menu shortcut, optional desktop shortcut, AUMID `StarFile.App`, uninstaller; `starfile.exe --uninstall-cleanup` removes autostart/registry leftovers. Self-update and portable zip stay supported |
 | **New submenu** | `newfile.rs` templates (`Action::New(index)`); separate contribution, same menu renderer |
 
 Verification harness (feature `screenshot`): `SWIFT_EXPLORER_SCREENSHOT`, `_DELAY`, `_SIZE=1280x800`,

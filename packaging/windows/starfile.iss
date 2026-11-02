@@ -1,30 +1,30 @@
-; Swift Explorer — kullanici başına kurulum (yonetici izni istemez).
+﻿; StarFile Explorer — kullanici başına kurulum (yonetici izni istemez).
 ;
 ; Derleme (Inno Setup 6):
-;   ISCC.exe /DAppVersion=0.7.0 packaging\windows\swift-explorer.iss
+;   ISCC.exe /DAppVersion=0.8.0 packaging\windows\starfile.iss
 ;
-; Cikti: dist\SwiftExplorer-Setup-<surum>.exe
+; Cikti: dist\StarFile-Setup-<surum>.exe
 ;
-; Kaldirici, dosyalari silmeden once `swift-explorer.exe --uninstall-cleanup`
+; Kaldirici, dosyalari silmeden once `starfile.exe --uninstall-cleanup`
 ; calistirir: otomatik baslatma kaydi ve varsayilan dosya gezgini anahtarlari
-; geri alınır. kullanici ayarlari (%APPDATA%\SwiftExplorer) bilerek korunur.
+; geri alınır. kullanici ayarlari (%APPDATA%\StarFile) bilerek korunur.
 
-#define AppName "Swift Explorer"
-#define AppExe "swift-explorer.exe"
-#define AppPublisher "Swift Explorer"
-#define AppUserModelID "io.github.misutesu_desu.SwiftExplorer"
+#define AppName "StarFile Explorer"
+#define AppExe "starfile.exe"
+#define AppPublisher "StarFile Explorer"
+#define AppUserModelID "io.github.some_rao.StarFile"
 
 #ifndef AppVersion
-  #define AppVersion "0.7.0"
+  #define AppVersion "0.8.0"
 #endif
 
-; Yerel test için: ISCC /DSourceExe=..\..\target\debug\swift-explorer.exe
+; Yerel test için: ISCC /DSourceExe=..\..\target\debug\starfile.exe
 #ifndef SourceExe
-  #define SourceExe "..\..\target\release\swift-explorer.exe"
+  #define SourceExe "..\..\target\release\starfile.exe"
 #endif
 
 [Setup]
-AppId={{8E2E4B7C-5F1D-4A83-9C0E-7B2D6A1F3C54}
+AppId={{3C6F1A9D-72B4-4E58-9D31-A0C5E8B74F26}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
@@ -34,7 +34,7 @@ DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir=..\..\dist
-OutputBaseFilename=SwiftExplorer-Setup-{#AppVersion}
+OutputBaseFilename=StarFile-Setup-{#AppVersion}
 SetupIconFile=..\..\assets\icon.ico
 UninstallDisplayIcon={app}\{#AppExe}
 UninstallDisplayName={#AppName}

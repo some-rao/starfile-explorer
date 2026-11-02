@@ -368,14 +368,14 @@ const PLAYER_HTML: &str = include_str!("player.html");
 fn data_dir() -> PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(std::env::temp_dir)
-        .join("SwiftExplorer")
+        .join("StarFile")
         .join("WebView2")
 }
 
 fn assets_dir() -> PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(std::env::temp_dir)
-        .join("SwiftExplorer")
+        .join("StarFile")
         .join("web")
 }
 

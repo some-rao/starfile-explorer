@@ -16,11 +16,11 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            bin: swift-explorer.exe
-            asset: SwiftExplorer.exe
+            bin: starfile.exe
+            asset: StarFile.exe
           - os: ubuntu-22.04
-            bin: swift-explorer
-            asset: swift-explorer-linux-x86_64
+            bin: starfile
+            asset: starfile-linux-x86_64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -36,17 +36,17 @@ jobs:
         run: |
           choco install innosetup --no-progress -y
           $ver = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME -replace '^v','' } else { (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"').Matches.Groups[1].Value }
-          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$ver" "packaging\windows\swift-explorer.iss"
-          Copy-Item "dist\SwiftExplorer-Setup-$ver.exe" "SwiftExplorer-Setup.exe"
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$ver" "packaging\windows\starfile.iss"
+          Copy-Item "dist\StarFile-Setup-$ver.exe" "StarFile-Setup.exe"
       - name: Package tar.gz
         if: runner.os == 'Linux'
         run: |
-          mkdir swift-explorer
-          cp target/release/swift-explorer LICENSE swift-explorer/
-          cp packaging/linux/io.github.misutesu_desu.SwiftExplorer.desktop packaging/linux/io.github.misutesu_desu.SwiftExplorer.metainfo.xml swift-explorer/
-          cp assets/icon.png swift-explorer/io.github.misutesu_desu.SwiftExplorer.png
-          chmod 755 swift-explorer/swift-explorer
-          tar -czf "${{ matrix.asset }}.tar.gz" swift-explorer
+          mkdir starfile
+          cp target/release/starfile LICENSE NOTICE starfile/
+          cp packaging/linux/io.github.some_rao.StarFile.desktop packaging/linux/io.github.some_rao.StarFile.metainfo.xml starfile/
+          cp assets/icon.png starfile/io.github.some_rao.StarFile.png
+          chmod 755 starfile/starfile
+          tar -czf "${{ matrix.asset }}.tar.gz" starfile
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset }}
@@ -54,8 +54,8 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
-          name: SwiftExplorer-Setup
-          path: SwiftExplorer-Setup.exe
+          name: StarFile-Setup
+          path: StarFile-Setup.exe
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
@@ -65,9 +65,9 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v') && runner.os == 'Windows'
         uses: softprops/action-gh-release@v2
         with:
-          files: SwiftExplorer-Setup.exe
+          files: StarFile-Setup.exe
 
-  # Uygulama yeni sürümü API yerine bu dosyadan öğrenir: istek sınırı yok
+  # Uygulama yeni surumu API yerine bu dosyadan ogrenir: istek siniri yok
   manifest:
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
@@ -75,13 +75,15 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: SwiftExplorer.exe
+          name: StarFile.exe
       - name: Write latest.json
         run: |
           version="${GITHUB_REF_NAME#v}"
           base="https://github.com/${GITHUB_REPOSITORY}/releases"
-          sha=$(sha256sum SwiftExplorer.exe | cut -d' ' -f1)
-          jq -n --arg v "$version" --arg page "$base/tag/$GITHUB_REF_NAME"             --arg url "$base/download/$GITHUB_REF_NAME/SwiftExplorer.exe" --arg sha "$sha"             '{version: $v, page: $page, windows: {url: $url, sha256: $sha}}' > latest.json
+          sha=$(sha256sum StarFile.exe | cut -d' ' -f1)
+          jq -n --arg v "$version" --arg page "$base/tag/$GITHUB_REF_NAME" \
+                --arg url "$base/download/$GITHUB_REF_NAME/StarFile.exe" --arg sha "$sha" \
+                '{version: $v, page: $page, windows: {url: $url, sha256: $sha}}' > latest.json
           cat latest.json
       - uses: softprops/action-gh-release@v2
         with:
@@ -116,11 +118,11 @@ jobs:
           path: packaging/flatpak
       - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          bundle: swift-explorer.flatpak
-          manifest-path: packaging/flatpak/io.github.misutesu_desu.SwiftExplorer.yml
+          bundle: starfile.flatpak
+          manifest-path: packaging/flatpak/io.github.some_rao.StarFile.yml
           cache-key: flatpak-builder-${{ hashFiles('Cargo.lock') }}
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: swift-explorer.flatpak
+          files: starfile.flatpak

@@ -256,9 +256,7 @@ fn pipe_name() -> Vec<u16> {
     let mut session = 0;
     unsafe { ProcessIdToSessionId(std::process::id(), &mut session) };
     let user = std::env::var("USERNAME").unwrap_or_default();
-    wide(OsStr::new(&format!(
-        r"\\.\pipe\SwiftExplorer-{session}-{user}"
-    )))
+    wide(OsStr::new(&format!(r"\\.\pipe\StarFile-{session}-{user}")))
 }
 
 /// Gizlenip bekleyen bir süreç varsa açılışı ona devreder. `true` dönerse pencere
@@ -422,7 +420,7 @@ pub fn take_reopen() -> Option<Option<PathBuf>> {
 pub const BACKGROUND_ARG: &str = "--background";
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-const RUN_VALUE: &str = "SwiftExplorer";
+const RUN_VALUE: &str = "StarFile";
 
 pub fn autostart() -> bool {
     use windows_sys::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_SZ};
@@ -540,7 +538,7 @@ pub fn peek_file(path: &Path) -> bool {
 
 // ---------- Varsayılan dosya gezgini: klasörler, sürücüler ve Win+E bu uygulamada açılır
 
-const VERB: &str = "SwiftExplorer";
+const VERB: &str = "StarFile";
 /// Klasör ve sürücülerin varsayılan eylemi bu anahtarların (Default) değeridir
 const SHELL_KEYS: [&str; 2] = [
     r"Software\Classes\Directory\shell",
@@ -600,7 +598,7 @@ fn reg_delete_tree(key: &str) {
     unsafe { RegDeleteTreeW(HKEY_CURRENT_USER, key.as_ptr()) };
 }
 
-/// `"C:\...\SwiftExplorer.exe" "%1"`; argümansız hali Win+E içindir
+/// `"C:\...\StarFile.exe" "%1"`; argümansız hali Win+E içindir
 fn launch_command(arg: &str) -> Option<OsString> {
     let exe = std::env::current_exe().ok()?;
     let mut cmd = OsString::from("\"");
@@ -633,7 +631,7 @@ pub fn set_default_file_manager(on: bool, _previous: Option<&str>) -> Option<Str
             reg_set(
                 &format!(r"{k}\{VERB}"),
                 None,
-                OsStr::new(crate::i18n::t("Swift Explorer ile aç")),
+                OsStr::new(crate::i18n::t("StarFile Explorer ile aç")),
             );
             reg_set(&format!(r"{k}\{VERB}\command"), None, &open);
             reg_set(k, None, OsStr::new(VERB));
@@ -657,11 +655,8 @@ pub fn set_default_file_manager(on: bool, _previous: Option<&str>) -> Option<Str
             reg_delete_tree(&format!(r"{k}\{VERB}"));
         }
         // Başka bir program yazdıysa dokunma
-        let ours =
-            reg_get(&format!(r"{WIN_E_KEY}\shell\opennewwindow\command"), None).is_some_and(|c| {
-                c.to_lowercase().contains("swiftexplorer")
-                    || c.to_lowercase().contains("swift-explorer")
-            });
+        let ours = reg_get(&format!(r"{WIN_E_KEY}\shell\opennewwindow\command"), None)
+            .is_some_and(|c| c.to_lowercase().contains("starfile"));
         if ours {
             reg_delete_tree(WIN_E_KEY);
         }
