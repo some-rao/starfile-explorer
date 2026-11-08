@@ -139,6 +139,12 @@ pub enum AppCmd {
     CopyPath,
     CalcSize,
     Peek,
+    /// Akrilik yerine bir arka plan resmi seç
+    PickBackground,
+    /// Arka plan resmini kaldırıp akriliğe dön
+    ClearBackground,
+    /// Seçili öğeleri kalıpla topluca yeniden adlandır
+    BatchRename,
 }
 
 pub struct Scan {
@@ -241,7 +247,7 @@ fn prefix_label(prefix: Prefix) -> &'static str {
 /// Placeholder shown inside the empty input for the current prefix.
 fn prefix_hint(prefix: Prefix) -> &'static str {
     match prefix {
-        Prefix::Files(_) => "Dosya veya klasör ara",
+        Prefix::Files(_) => "Dosya veya klasör ara — komutlar için > yaz",
         Prefix::Commands => "Komut ara",
         Prefix::Path => "Yol yaz",
         Prefix::Recents => "Son klasör ara",
@@ -472,6 +478,8 @@ pub fn app_commands(known: usize) -> Vec<AppCmd> {
         AppCmd::ToggleSplit,
         AppCmd::ToggleGit,
         AppCmd::ToggleHighlight,
+        AppCmd::PickBackground,
+        AppCmd::ClearBackground,
         AppCmd::GoHome,
         AppCmd::GoThisPc,
         AppCmd::GoGallery,
@@ -484,6 +492,7 @@ pub fn app_commands(known: usize) -> Vec<AppCmd> {
         AppCmd::Properties,
         AppCmd::CopyPath,
         AppCmd::CalcSize,
+        AppCmd::BatchRename,
         AppCmd::Peek,
     ]);
     commands
@@ -524,6 +533,8 @@ fn app_cmd_label(cmd: AppCmd, app: &App) -> String {
         AppCmd::ToggleSplit => i18n::t("Bölünmüş görünüm").into(),
         AppCmd::ToggleGit => i18n::t("Git sütununu göster").into(),
         AppCmd::ToggleHighlight => i18n::t("Kod vurgulama").into(),
+        AppCmd::PickBackground => i18n::t("Arka plan resmi seç…").into(),
+        AppCmd::ClearBackground => i18n::t("Arka planı kaldır").into(),
         AppCmd::GoHome => i18n::t("Giriş").into(),
         AppCmd::GoThisPc => i18n::t("Bu bilgisayar").into(),
         AppCmd::GoGallery => i18n::t("Galeri").into(),
@@ -536,6 +547,7 @@ fn app_cmd_label(cmd: AppCmd, app: &App) -> String {
         AppCmd::Properties => i18n::t("Özellikler").into(),
         AppCmd::CopyPath => i18n::t("Yolu kopyala").into(),
         AppCmd::CalcSize => i18n::t("Klasör boyutlarını hesapla").into(),
+        AppCmd::BatchRename => i18n::t("Toplu yeniden adlandır…").into(),
         AppCmd::Peek => i18n::t("Hızlı Önizleme").into(),
     }
 }
@@ -566,7 +578,8 @@ fn app_cmd_disabled(cmd: AppCmd, app: &App) -> Option<&'static str> {
         | AppCmd::Terminal
         | AppCmd::Properties
         | AppCmd::CopyPath
-        | AppCmd::CalcSize => {
+        | AppCmd::CalcSize
+        | AppCmd::BatchRename => {
             if virtual_location {
                 Some(here_reason)
             } else {
@@ -603,6 +616,8 @@ fn app_cmd_action(cmd: AppCmd, app: &App) -> Action {
         AppCmd::ToggleSplit => Action::ToggleSplit,
         AppCmd::ToggleGit => Action::ToggleGitColumn,
         AppCmd::ToggleHighlight => Action::ToggleHighlight,
+        AppCmd::PickBackground => Action::PickBackground,
+        AppCmd::ClearBackground => Action::ClearBackground,
         AppCmd::GoHome => Action::Navigate(PathBuf::new()),
         AppCmd::GoThisPc => Action::Navigate(PathBuf::from(THIS_PC)),
         AppCmd::GoGallery => Action::Navigate(PathBuf::from(crate::tab::GALLERY)),
@@ -616,6 +631,7 @@ fn app_cmd_action(cmd: AppCmd, app: &App) -> Action {
         AppCmd::Properties => Action::Properties(current),
         AppCmd::CopyPath => Action::CopyPath,
         AppCmd::CalcSize => Action::CalcSize,
+        AppCmd::BatchRename => Action::BatchRename,
         AppCmd::Peek => Action::Peek,
     }
 }
@@ -2049,7 +2065,7 @@ impl super::App {
                     "; {}    ;; {}    > {}    / {}    @ {}",
                     i18n::t("Alt klasörler"),
                     i18n::t("Bu bilgisayar"),
-                    i18n::t("Komutlar"),
+                    i18n::t("Explorer komutları"),
                     i18n::t("Yol"),
                     i18n::t("Son kullanılanlar"),
                 )

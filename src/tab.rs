@@ -208,9 +208,9 @@ impl Tab {
         self.path.as_os_str() == GALLERY
     }
 
-    /// Dosya listesi gösteriliyor: gerçek klasör ya da arama sonuçları
+    /// Dosya listesi gösteriliyor: gerçek klasör, Galeri ya da arama sonuçları
     pub fn lists_files(&self) -> bool {
-        !self.is_home() || self.search.is_some()
+        self.is_gallery() || !self.is_home() || self.search.is_some()
     }
 
     pub fn is_loading(&self) -> bool {

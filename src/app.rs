@@ -96,6 +96,8 @@ struct Config {
     highlight: bool,
     /// Boşluk tuşu: 0 = yerleşik Hızlı Önizleme, 1 = PowerToys Peek, 2 = kapalı
     quick_look: u8,
+    /// Akrilik yerine pencere arkasına çizilecek resim (Outlook tarzı arka plan)
+    background_image: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -120,9 +122,10 @@ impl Default for Config {
             previous_folder_app: None,
             remember_views: true,
             folder_views: HashMap::new(),
-            git_column: true,
+            git_column: false,
             highlight: true,
             quick_look: 0,
+            background_image: None,
         }
     }
 }
@@ -428,18 +431,18 @@ enum Action {
     RevealPath(PathBuf),
     ShellMenu {
         extended: bool,
+        /// Boş alan menüsü (seçim yok sayılır)
+        background: bool,
     },
-    /// Modern (Win11 tarzı) sağ tık menüsünü aç
+    /// Modern (Win11 tarzı) sağ tık menüsünü aç. `full` ise kabuk menüsünün
+    /// tamamı listelenir ("Daha fazla seçenek göster").
     OpenMenu {
         target: MenuTarget,
         pos: Pos2,
+        full: bool,
     },
-    /// Gerçek yerel menüyü aç (Shift+F10 / "Daha fazla seçenek")
-    NativeMenu {
-        paths: Vec<PathBuf>,
-        background: Option<PathBuf>,
-        extended: bool,
-    },
+    /// Toplu yeniden adlandırma penceresi
+    BatchRename,
     CalcSize,
     AddBookmark(PathBuf),
     RemoveBookmark(PathBuf),
@@ -466,6 +469,8 @@ enum Action {
     ForgetFolderView,
     ToggleGitColumn,
     ToggleHighlight,
+    PickBackground,
+    ClearBackground,
     SetQuickLook(u8),
     ToggleSplit,
     ToggleDefaultFm,
@@ -488,12 +493,23 @@ enum Dialog {
         names: Vec<String>,
     },
     Help,
+    /// Toplu yeniden adlandırma: kalıp + başlangıç numarası, canlı önizlemeli.
+    BatchRename {
+        items: Vec<PathBuf>,
+        pattern: String,
+        start: i64,
+    },
     #[cfg(not(windows))]
     Properties(Box<crate::properties::Properties>),
 }
 
 enum UndoOp {
-    Rename { from: PathBuf, to: PathBuf },
+    Rename {
+        from: PathBuf,
+        to: PathBuf,
+    },
+    /// Toplu yeniden adlandırma: (eski, yeni) çiftleri
+    Renamed(Vec<(PathBuf, PathBuf)>),
     Created(PathBuf),
     Moved(Vec<(PathBuf, PathBuf)>),
     Copied(Vec<PathBuf>),
@@ -588,6 +604,11 @@ pub struct App {
     highlight: bool,
     /// Boşluk tuşu: 0 = yerleşik Hızlı Önizleme, 1 = PowerToys Peek, 2 = kapalı
     quick_look: u8,
+    /// Arka plan resmi (akrilik yerine); doku hazır olana kadar `None`
+    wallpaper: Option<egui::TextureHandle>,
+    wallpaper_path: Option<PathBuf>,
+    wallpaper_tx: std::sync::mpsc::Sender<(PathBuf, Option<egui::ColorImage>)>,
+    wallpaper_rx: std::sync::mpsc::Receiver<(PathBuf, Option<egui::ColorImage>)>,
     /// Açık Hızlı Önizleme katmanı (Boşluk)
     quick: Option<QuickLook>,
     /// Ctrl+K komut paleti
@@ -944,9 +965,17 @@ struct Pal {
 /// yarı saydam çizilir. `App::new` GL yüzeyinin alfa bitlerine bakarak ayarlar.
 static GLASS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Kullanıcı akrilik yerine bir arka plan resmi seçti mi (bkz. `Config.background_image`).
+static WALLPAPER_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 /// Cam efekti etkin mi (bkz. `GLASS`).
 pub(crate) fn glass() -> bool {
     GLASS.load(Relaxed)
+}
+
+/// Arka plan resmi etkin mi (akrilik yerine).
+pub(crate) fn wallpaper_on() -> bool {
+    WALLPAPER_ON.load(Relaxed)
 }
 
 /// Cam modunda pencere zeminini (sekme şeridi, kartlar arası oluklar, durum
@@ -961,7 +990,67 @@ fn pal(dark: bool) -> Pal {
         p.strip = Color32::TRANSPARENT;
         p.canvas = Color32::TRANSPARENT;
     }
+    if wallpaper_on() {
+        // The wallpaper must read through the chrome: gutters and canvas stay
+        // mostly open, cards keep a tint for contrast but are no longer opaque
+        // white panels. Text and menus stay fully opaque.
+        //
+        // Alpha is taken from the *solid* palette: with acrylic on, `strip` and
+        // `canvas` above are fully transparent, which would turn into a black
+        // veil over the image.
+        let solid = pal_solid(dark);
+        p.strip = with_alpha(solid.strip, if dark { 100 } else { 112 });
+        p.canvas = with_alpha(solid.canvas, if dark { 84 } else { 96 });
+        // Cards: white at ~65% still reads as paper on a bright photo, so the
+        // light theme is pulled slightly toward the gutter grey to look frosted.
+        let card = if dark {
+            solid.card
+        } else {
+            scheme::mix(solid.card, solid.strip, 0.22)
+        };
+        p.card = with_alpha(card, if dark { 164 } else { 160 });
+    }
     p
+}
+
+fn with_alpha(c: Color32, a: u8) -> Color32 {
+    Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), a)
+}
+
+/// Arka plan resmini çözer ve GPU'ya yüklemeden önce makul bir boyuta indirir.
+fn load_wallpaper_image(path: &Path) -> Option<egui::ColorImage> {
+    let img = image::ImageReader::open(path)
+        .ok()?
+        .with_guessed_format()
+        .ok()?
+        .decode()
+        .ok()?;
+    // 4K'dan büyük resimleri küçült: doku belleği ve yükleme süresi sınırlı kalsın.
+    let img = img.thumbnail(3840, 2160);
+    let rgba = img.to_rgba8();
+    Some(egui::ColorImage::from_rgba_unmultiplied(
+        [rgba.width() as usize, rgba.height() as usize],
+        rgba.as_raw(),
+    ))
+}
+
+/// Kaynağı ekranı tamamen kaplayacak şekilde kırpar (cover).
+fn cover_uv(img: Vec2, screen: Vec2) -> Rect {
+    let img_aspect = img.x / img.y.max(1.0);
+    let screen_aspect = screen.x / screen.y.max(1.0);
+    if img_aspect > screen_aspect {
+        let w = screen_aspect / img_aspect;
+        Rect::from_min_max(
+            egui::pos2((1.0 - w) * 0.5, 0.0),
+            egui::pos2((1.0 + w) * 0.5, 1.0),
+        )
+    } else {
+        let h = img_aspect / screen_aspect;
+        Rect::from_min_max(
+            egui::pos2(0.0, (1.0 - h) * 0.5),
+            egui::pos2(1.0, (1.0 + h) * 0.5),
+        )
+    }
 }
 
 fn pal_solid(dark: bool) -> Pal {
@@ -1804,6 +1893,110 @@ pub(crate) fn valid_name(name: &str) -> bool {
     !n.is_empty() && !n.chars().any(|c| "\\/:*?\"<>|".contains(c)) && n != "." && n != ".."
 }
 
+/// Toplu yeniden adlandırma kalıbı: `{name}` özgün ad, `{n}` sıra numarası,
+/// `{date}` değiştirme tarihi (YYYY-AA-GG). Uzantı korunur.
+///
+/// Tek geçişte değiştirilir: özgün adın içinde `{n}` geçse bile yeniden
+/// yorumlanmaz. `{date}` kalıpta yoksa dosya sistemi hiç okunmaz.
+fn expand_pattern(pattern: &str, stem: &str, n: i64, path: &Path) -> String {
+    let date = if pattern.contains("{date}") {
+        std::fs::metadata(path)
+            .and_then(|m| m.modified())
+            .map(|t| {
+                chrono::DateTime::<chrono::Local>::from(t)
+                    .format("%Y-%m-%d")
+                    .to_string()
+            })
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    let number = n.to_string();
+    let mut out = String::with_capacity(pattern.len() + stem.len());
+    let mut rest = pattern;
+    while let Some(i) = rest.find('{') {
+        out.push_str(&rest[..i]);
+        let tail = &rest[i..];
+        if let Some(t) = tail.strip_prefix("{name}") {
+            out.push_str(stem);
+            rest = t;
+        } else if let Some(t) = tail.strip_prefix("{n}") {
+            out.push_str(&number);
+            rest = t;
+        } else if let Some(t) = tail.strip_prefix("{date}") {
+            out.push_str(&date);
+            rest = t;
+        } else {
+            out.push('{');
+            rest = &tail[1..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Windows'ta yol karşılaştırması büyük/küçük harfe duyarsızdır; yalnızca
+/// harf değiştiren yeniden adlandırma çakışma sayılmasın.
+fn same_path(a: &Path, b: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        a.as_os_str()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(&b.as_os_str().to_string_lossy())
+    }
+    #[cfg(not(windows))]
+    {
+        a == b
+    }
+}
+
+/// Toplu yeniden adlandırma planı: (eski yol, yeni yol). Adlar doğrulanır ve
+/// çakışmalar (hem seçim içinde hem klasörde) hata olarak döner.
+fn batch_rename_plan(
+    items: &[PathBuf],
+    pattern: &str,
+    start: i64,
+) -> Result<Vec<(PathBuf, PathBuf)>, String> {
+    if pattern.trim().is_empty() {
+        return Err(crate::i18n::t("Ad kalıbı boş olamaz").into());
+    }
+    let mut seen: Vec<String> = Vec::new();
+    let mut plan: Vec<(PathBuf, PathBuf)> = Vec::new();
+    for (i, path) in items.iter().enumerate() {
+        let stem = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let ext = path
+            .extension()
+            .map(|e| e.to_string_lossy().into_owned())
+            .filter(|e| !e.is_empty());
+        let mut new_name = expand_pattern(pattern, &stem, start + i as i64, path);
+        if let Some(ext) = ext {
+            new_name.push('.');
+            new_name.push_str(&ext);
+        }
+        if !valid_name(&new_name) {
+            return Err(crate::i18n::tf("Geçersiz ad: {}", &[&new_name]));
+        }
+        let key = new_name.to_lowercase();
+        if seen.contains(&key) {
+            return Err(crate::i18n::tf("Yeni adlar çakışıyor: {}", &[&new_name]));
+        }
+        seen.push(key);
+        let target = path.with_file_name(&new_name);
+        if target.as_path() == path.as_path() {
+            continue;
+        }
+        // Klasörde kalan (seçime dahil olmayan) bir öğeyle çakışma
+        if target.exists() && !items.iter().any(|p| same_path(p, &target)) {
+            return Err(crate::i18n::tf("Yeni adlar çakışıyor: {}", &[&new_name]));
+        }
+        plan.push((path.clone(), target));
+    }
+    Ok(plan)
+}
+
 #[cfg(not(windows))]
 fn same_volume(a: &Path, b: &Path) -> bool {
     use std::os::unix::fs::MetadataExt;
@@ -1901,6 +2094,7 @@ impl App {
 
         let (git_tx, git_rx) = std::sync::mpsc::channel();
         let (peek_tx, peek_rx) = std::sync::mpsc::channel();
+        let (wallpaper_tx, wallpaper_rx) = std::sync::mpsc::channel();
 
         let app = App {
             tabs,
@@ -1926,6 +2120,10 @@ impl App {
             git_pending: Default::default(),
             highlight: cfg.highlight,
             quick_look: cfg.quick_look,
+            wallpaper: None,
+            wallpaper_path: cfg.background_image.clone(),
+            wallpaper_tx,
+            wallpaper_rx,
             quick: None,
             palette: None,
             split: false,
@@ -1999,6 +2197,10 @@ impl App {
         };
         app.refresh_drives();
         app.watch_drives();
+        if let Some(p) = app.wallpaper_path.clone() {
+            WALLPAPER_ON.store(true, Relaxed);
+            app.load_wallpaper(p);
+        }
         app
     }
 
@@ -2025,6 +2227,83 @@ impl App {
         }
     }
 
+    /// Arka plan resmini iş parçacığında çözer; sonuç `poll_wallpaper` ile dokuya dönüşür.
+    fn load_wallpaper(&self, path: PathBuf) {
+        let tx = self.wallpaper_tx.clone();
+        let ctx = self.ctx.clone();
+        std::thread::spawn(move || {
+            let img = load_wallpaper_image(&path);
+            let _ = tx.send((path, img));
+            ctx.request_repaint();
+        });
+    }
+
+    /// Arka plan yükleyicisinden gelen sonucu dokuya çevirir.
+    fn poll_wallpaper(&mut self) {
+        while let Ok((path, img)) = self.wallpaper_rx.try_recv() {
+            if self.wallpaper_path.as_deref() != Some(path.as_path()) {
+                continue;
+            }
+            match img {
+                Some(image) => {
+                    self.wallpaper = Some(self.ctx.load_texture(
+                        "background_image",
+                        image,
+                        egui::TextureOptions::LINEAR,
+                    ));
+                }
+                None => {
+                    self.wallpaper = None;
+                    self.wallpaper_path = None;
+                    WALLPAPER_ON.store(false, Relaxed);
+                    self.toast(
+                        crate::i18n::tf(
+                            "Arka plan resmi yüklenemedi: {}",
+                            &[&path.display().to_string()],
+                        ),
+                        true,
+                    );
+                    self.save_config();
+                }
+            }
+            self.ctx.request_repaint();
+        }
+    }
+
+    /// Arka plan resmini seçer/kaldırır; ayarı hemen kaydeder.
+    fn set_background(&mut self, path: Option<PathBuf>) {
+        self.wallpaper = None;
+        self.wallpaper_path = path.clone();
+        WALLPAPER_ON.store(path.is_some(), Relaxed);
+        if let Some(p) = path {
+            self.load_wallpaper(p);
+        }
+        self.save_config();
+        self.ctx.request_repaint();
+    }
+
+    /// Seçili arka plan resmini pencerenin arkasına, en-boy oranını koruyarak çizer.
+    fn draw_wallpaper(&self, ctx: &egui::Context) {
+        let Some(tex) = &self.wallpaper else {
+            return;
+        };
+        let screen = ctx.screen_rect();
+        let painter = ctx.layer_painter(egui::LayerId::background());
+        painter.image(
+            tex.id(),
+            screen,
+            cover_uv(tex.size_vec2(), screen.size()),
+            Color32::WHITE,
+        );
+        // Metin okunurluğu için resmi hafifçe karart.
+        let dim = if ctx.style().visuals.dark_mode {
+            40
+        } else {
+            12
+        };
+        painter.rect_filled(screen, 0.0, Color32::from_black_alpha(dim));
+    }
+
     fn save_config(&mut self) {
         let cfg = Config {
             bookmarks: self.bookmarks.clone(),
@@ -2045,6 +2324,7 @@ impl App {
             git_column: self.git_column,
             highlight: self.highlight,
             quick_look: self.quick_look,
+            background_image: self.wallpaper_path.clone(),
             background: self.background,
             auto_update: self.auto_update.load(Relaxed),
             last_update_check: self.last_update_check.load(Relaxed),
@@ -2449,6 +2729,60 @@ impl App {
         }
     }
 
+    /// Toplu yeniden adlandırmayı uygular: tüm kaynaklar önce geçici ada taşınır,
+    /// sonra hedef ada; böylece takaslar ve döngüler çakışmaz. Hata olursa geri sarılır.
+    fn apply_batch_rename(&mut self, items: &[PathBuf], pattern: &str, start: i64) {
+        let plan = match batch_rename_plan(items, pattern, start) {
+            Ok(plan) => plan,
+            Err(e) => {
+                self.toast(e, true);
+                return;
+            }
+        };
+        if plan.is_empty() {
+            return;
+        }
+        let tag = format!("starfile-br-{}-", std::process::id());
+        let mut temps: Vec<PathBuf> = Vec::new();
+        let mut origins: Vec<PathBuf> = Vec::new();
+        for (i, (from, _)) in plan.iter().enumerate() {
+            let temp = from.with_file_name(format!("{tag}{i}.tmp"));
+            if let Err(e) = std::fs::rename(from, &temp) {
+                for (t, o) in temps.iter().zip(origins.iter()).rev() {
+                    let _ = std::fs::rename(t, o);
+                }
+                self.toast(crate::i18n::tf("Yeniden adlandırılamadı: {}", &[&e]), true);
+                return;
+            }
+            origins.push(from.clone());
+            temps.push(temp);
+        }
+        let mut pairs: Vec<(PathBuf, PathBuf)> = Vec::new();
+        for (i, temp) in temps.iter().enumerate() {
+            let to = &plan[i].1;
+            if let Err(e) = std::fs::rename(temp, to) {
+                // Tamamlananları ve kalan geçici adları eski yerlerine döndür
+                for (from, to) in pairs.iter().rev() {
+                    let _ = std::fs::rename(to, from);
+                }
+                for (j, t) in temps.iter().enumerate().skip(i) {
+                    let _ = std::fs::rename(t, &origins[j]);
+                }
+                self.toast(crate::i18n::tf("Yeniden adlandırılamadı: {}", &[&e]), true);
+                self.reload_active(None);
+                return;
+            }
+            pairs.push((origins[i].clone(), to.clone()));
+        }
+        let count = pairs.len();
+        self.undo.push(UndoOp::Renamed(pairs));
+        self.reload_active(None);
+        self.toast(
+            crate::i18n::tf("{} öğe yeniden adlandırıldı", &[&count]),
+            false,
+        );
+    }
+
     fn do_undo(&mut self) {
         let Some(op) = self.undo.pop() else {
             self.toast(crate::i18n::t("Geri alınacak bir işlem yok"), false);
@@ -2463,6 +2797,17 @@ impl App {
                 }
                 Err(e) => self.toast(crate::i18n::tf("Geri alınamadı: {}", &[&e]), true),
             },
+            UndoOp::Renamed(pairs) => {
+                // Ters sırada geri al: iki aşamalı adlandırmada çakışma olmaz.
+                for (from, to) in pairs.iter().rev() {
+                    let _ = std::fs::rename(to, from);
+                }
+                self.toast(
+                    crate::i18n::t("Toplu yeniden adlandırma geri alındı"),
+                    false,
+                );
+                self.reload_active(None);
+            }
             UndoOp::Created(p) => {
                 self.push_job(fsutil::spawn_delete(vec![p], false, ctx), false);
                 self.toast(crate::i18n::t("Oluşturma geri alındı"), false);
@@ -2687,6 +3032,12 @@ impl App {
             if shortcut(i, Modifiers::CTRL, Key::Z) {
                 actions.push(Action::Undo);
             }
+            if shortcut(i, Modifiers::CTRL, Key::X) {
+                actions.push(Action::Cut);
+            }
+            if shortcut(i, Modifiers::CTRL, Key::C) {
+                actions.push(Action::Copy);
+            }
             if shortcut(i, Modifiers::CTRL, Key::A) {
                 actions.push(Action::SelectAll);
             }
@@ -2707,7 +3058,10 @@ impl App {
                 actions.push(Action::Rename);
             }
             if NATIVE_MENU && shortcut(i, Modifiers::SHIFT, Key::F10) {
-                actions.push(Action::ShellMenu { extended: false });
+                actions.push(Action::ShellMenu {
+                    extended: false,
+                    background: false,
+                });
             }
             if shortcut(i, Modifiers::NONE, Key::Backspace) {
                 actions.push(Action::Up);
@@ -3203,35 +3557,44 @@ impl App {
                 t.navigate(parent, true, &ctx);
                 t.select_after_load = Some(p);
             }
-            Action::ShellMenu { extended } => {
-                let mut paths = self.tab().selected_paths();
-                if paths.is_empty() && !self.tab().is_home() {
-                    paths = vec![self.tab().path.clone()];
-                }
-                if let (Some(hwnd), false) = (self.hwnd, paths.is_empty()) {
-                    if let MenuResult::Rename = shell::context_menu(hwnd, &paths, extended) {
-                        self.apply(Action::Rename);
+            Action::ShellMenu {
+                extended,
+                background,
+            } => {
+                // Windows'un gerçek menüsü; açılamazsa uygulama içi tam menüye düşülür.
+                let target = if background {
+                    MenuTarget::Background {
+                        folder: self.tab().path.clone(),
+                        in_search: self.tab().search.is_some(),
                     }
-                    // Menü kendi mesaj döngüsünü çalıştırdı; egui'deki basılı fare durumunu sıfırla
-                    self.inject_release = ctx.input(|i| i.pointer.latest_pos());
+                } else {
+                    self.menu_target_here()
+                };
+                if !self.show_native_menu(&ctx, &target, extended) {
+                    let pos = ctx.input(|i| i.pointer.latest_pos()).unwrap_or_default();
+                    self.open_context_menu(&ctx, target, pos, true);
                 }
             }
-            Action::OpenMenu { target, pos } => self.open_context_menu(&ctx, target, pos),
-            Action::NativeMenu {
-                paths,
-                background,
-                extended,
-            } => {
-                if let Some(hwnd) = self.hwnd {
-                    let res = if let Some(folder) = background {
-                        shell::background_context_menu(hwnd, &folder, extended)
-                    } else {
-                        shell::context_menu(hwnd, &paths, extended)
-                    };
-                    if let MenuResult::Rename = res {
-                        self.apply(Action::Rename);
+            Action::OpenMenu { target, pos, full } => {
+                self.open_context_menu(&ctx, target, pos, full)
+            }
+            Action::BatchRename => {
+                let mut items = self.tab().selected_paths();
+                items.sort_by_key(|p| {
+                    p.file_name()
+                        .map(|n| n.to_string_lossy().to_lowercase())
+                        .unwrap_or_default()
+                });
+                match items.len() {
+                    0 => self.toast(crate::i18n::t("Önce öğe seçin"), false),
+                    1 => self.apply(Action::Rename),
+                    _ => {
+                        self.dialog = Dialog::BatchRename {
+                            items,
+                            pattern: "{name} ({n})".to_string(),
+                            start: 1,
+                        }
                     }
-                    self.inject_release = ctx.input(|i| i.pointer.latest_pos());
                 }
             }
             Action::CalcSize => {
@@ -3353,6 +3716,19 @@ impl App {
                 self.mark_views_dirty();
                 self.save_config();
             }
+            Action::PickBackground => {
+                let path = self.tabs[self.active].path.clone();
+                let start = path.is_dir().then_some(path);
+                if let Some(p) = shell::pick_file(
+                    self.hwnd.unwrap_or(0),
+                    start.as_deref(),
+                    crate::i18n::t("Resim dosyaları"),
+                    "*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp",
+                ) {
+                    self.set_background(Some(p));
+                }
+            }
+            Action::ClearBackground => self.set_background(None),
             Action::ToggleHighlight => {
                 self.highlight = !self.highlight;
                 self.save_config();
@@ -4040,6 +4416,16 @@ impl App {
                             .clicked()
                         {
                             actions.push(Action::CalcSize);
+                            ui.close_menu();
+                        }
+                        if ui
+                            .add_enabled(
+                                has_sel,
+                                egui::Button::new(crate::i18n::t("Toplu yeniden adlandır…")),
+                            )
+                            .clicked()
+                        {
+                            actions.push(Action::BatchRename);
                             ui.close_menu();
                         }
                         if ui
@@ -5181,9 +5567,83 @@ impl App {
             });
     }
 
+    /// Etkin sekmenin seçimine göre menü hedefi: seçili öğeler ya da klasörün boş alanı.
+    fn menu_target_here(&mut self) -> MenuTarget {
+        let t = self.tab();
+        let in_search = t.search.is_some();
+        let mut paths = t.selected_paths();
+        if paths.is_empty() && !t.is_home() {
+            paths = vec![t.path.clone()];
+        }
+        let primary = paths.first().cloned();
+        match primary {
+            Some(primary) => {
+                let is_dir = primary.is_dir();
+                MenuTarget::Items {
+                    paths,
+                    is_dir,
+                    in_search,
+                    primary,
+                }
+            }
+            None => MenuTarget::Background {
+                folder: t.path.clone(),
+                in_search,
+            },
+        }
+    }
+
+    /// Windows'un gerçek kabuk menüsünü imleçte açar. Menü hiç görünmediyse
+    /// `false` döner; çağıran uygulama içi menüye düşer. `TrackPopupMenuEx`
+    /// sahibi pencere ön planda değilken anında kapanabildiği için bu gerekli.
+    fn show_native_menu(
+        &mut self,
+        ctx: &egui::Context,
+        target: &MenuTarget,
+        extended: bool,
+    ) -> bool {
+        let Some(hwnd) = self.hwnd else {
+            return false;
+        };
+        let (paths, background) = match target {
+            MenuTarget::Items { paths, .. } => {
+                let mut paths = paths.clone();
+                if paths.is_empty() && !self.tab().is_home() {
+                    paths = vec![self.tab().path.clone()];
+                }
+                (paths, None)
+            }
+            MenuTarget::Background { folder, .. } => (vec![], Some(folder.clone())),
+        };
+        let started = Instant::now();
+        let res = if let Some(folder) = background {
+            shell::background_context_menu(hwnd, &folder, extended)
+        } else {
+            shell::context_menu(hwnd, &paths, extended)
+        };
+        let failed = matches!(&res, MenuResult::None);
+        if let MenuResult::Rename = res {
+            self.apply(Action::Rename);
+        }
+        // Menü kendi mesaj döngüsünü çalıştırdı; egui'deki basılı fare durumunu sıfırla.
+        self.inject_release = ctx.input(|i| i.pointer.latest_pos());
+        ctx.request_repaint();
+        // Birkaç milisaniyede dönen menü hiç görünmemiştir (sahip ön planda
+        // değil, bekleyen fare bırakması). O durumda uygulama içi menü açılır.
+        !(failed && started.elapsed() < Duration::from_millis(150))
+    }
+
     /// Modern (Windows 11 tarzı) sağ tık menüsünü kurar: uygulama komutları + gerçek
     /// kabuk komutları (terminal, arşiv, birlikte aç…) + "Daha fazla seçenek".
-    fn open_context_menu(&mut self, ctx: &egui::Context, target: MenuTarget, pos: Pos2) {
+    /// `full` true ise kabuk menüsünün tamamı (filtresiz) ve "Daha fazla seçenek"
+    /// satırı olmadan çizilir.
+    fn open_context_menu(
+        &mut self,
+        ctx: &egui::Context,
+        target: MenuTarget,
+        pos: Pos2,
+        full: bool,
+    ) {
         let mut m = Menu::new(pos);
         let mut acts: Vec<Action> = Vec::new();
         let mut shell_paths: Vec<PathBuf> = Vec::new();
@@ -5262,6 +5722,7 @@ impl App {
                     );
                 }
                 let sel_paths = self.tabs[self.active].selected_paths();
+                let sel_count = sel_paths.len();
                 app_node(
                     &mut acts,
                     &mut m,
@@ -5283,6 +5744,22 @@ impl App {
                         cut: true,
                     },
                     |n| n,
+                );
+                // Toplu yeniden adlandırma yalnızca iki ve daha fazla öğede anlamlı
+                app_node(
+                    &mut acts,
+                    &mut m,
+                    "Toplu yeniden adlandır…",
+                    g::RENAME,
+                    Action::BatchRename,
+                    move |n| {
+                        let n = n.sep_before();
+                        if sel_count >= 2 {
+                            n
+                        } else {
+                            n.disabled()
+                        }
+                    },
                 );
                 m.quick = vec![
                     quick(&mut acts, Action::Cut, g::CUT, "Kes (Ctrl+X)", true),
@@ -5390,9 +5867,26 @@ impl App {
                 }
             }
         }
-        if cfg!(windows) && !shell_paths.is_empty() {
-            // Kabuk komutları (arşiv, üçüncü taraf, birlikte aç…) uygulama komutlarından sonra
-            self.push_shell_nodes(ctx, &mut m, &shell_paths, None);
+        let mut has_more_options = false;
+        if cfg!(windows) {
+            // Galeri sanal bir görünüm: kabuk menüsünü önden okumak ağır uzantılar
+            // yüzünden arayüzü dondurabiliyor. Kabuk seçenekleri "Daha fazla
+            // seçenek göster" / Shift+F10 ile isteğe bağlı açılır.
+            let gallery = self.tab().is_gallery();
+            if gallery {
+                has_more_options = !full;
+            } else if !shell_paths.is_empty() {
+                // Kabuk komutları (arşiv, üçüncü taraf, birlikte aç…) uygulama komutlarından sonra
+                has_more_options = self.push_shell_nodes(ctx, &mut m, &shell_paths, None, full);
+            } else if let MenuTarget::Background { folder, .. } = &target {
+                // Boş alanda kabuk satırları egui menüsüne gömülmez; klasik menüde
+                // ek seçenek varsa "Daha fazla seçenek göster" sunulur.
+                if let Some(hwnd) = self.hwnd {
+                    has_more_options =
+                        crate::shell::ShellMenu::build(hwnd, &[], Some(folder.as_path()), false)
+                            .is_some_and(|sm| !sm.is_empty());
+                }
+            }
         }
         if let MenuTarget::Items { primary, .. } = &target {
             app_node(
@@ -5412,7 +5906,7 @@ impl App {
                 |n| n.shortcut("Alt+Enter"),
             );
         }
-        if cfg!(windows) {
+        if cfg!(windows) && !full && has_more_options {
             // Son satır: Explorer'ın klasik menüsünü açar
             let (label, _) = menu::parts("Daha fazla seçenek göster  Shift+F10");
             m.nodes.push(
@@ -5554,6 +6048,25 @@ impl App {
             show.children.push(row);
         }
         m.nodes.push(show);
+        // Arka plan alt menüsü: akrilik (varsayılan) ya da seçilen resim
+        let mut bg = Node::new(crate::i18n::t("Arka plan"));
+        let id = acts.len() as u32;
+        acts.push(Action::ClearBackground);
+        bg.children.push(
+            Node::new(crate::i18n::t("Akrilik (varsayılan)"))
+                .with_cmd(Cmd::App(id))
+                .checked(self.wallpaper_path.is_none()),
+        );
+        let id = acts.len() as u32;
+        acts.push(Action::PickBackground);
+        bg.children
+            .push(Node::new(crate::i18n::t("Arka plan resmi seç…")).with_cmd(Cmd::App(id)));
+        let id = acts.len() as u32;
+        acts.push(Action::ClearBackground);
+        let mut row = Node::new(crate::i18n::t("Arka planı kaldır")).with_cmd(Cmd::App(id));
+        row.enabled = self.wallpaper_path.is_some();
+        bg.children.push(row);
+        m.nodes.push(bg);
         // Tema alt menüsü: Sistem/Açık/Koyu + renk şemaları (radyo noktalı)
         let mut theme = Node::new(crate::i18n::t("Tema")).sep_before();
         for (v, key) in [(0u8, "Sistem"), (1, "Açık"), (2, "Koyu")] {
@@ -5598,22 +6111,29 @@ impl App {
         m
     }
 
-    /// Gerçek kabuk menüsünü okuyup modern menüye ekler.
+    /// Gerçek kabuk menüsünü okuyup menüye ekler. `full` false ise yalnızca
+    /// Windows 11'in modern menüsünde görünen satırlar alınır; true ise klasik
+    /// menünün tamamı ("Daha fazla seçenek göster") listelenir.
+    ///
+    /// Dönen değer: `!full` modunda, gösterilenlerin dışında gizlenen kabuk
+    /// seçeneği var mı (yani "Daha fazla seçenek" anlamlı mı).
     fn push_shell_nodes(
         &mut self,
         ctx: &egui::Context,
         m: &mut Menu,
         paths: &[PathBuf],
         background: Option<&Path>,
-    ) {
-        let Some(hwnd) = self.hwnd else { return };
+        full: bool,
+    ) -> bool {
+        let Some(hwnd) = self.hwnd else { return false };
         let Some(sm) = crate::shell::ShellMenu::build(hwnd, paths, background, false) else {
-            return;
+            return false;
         };
         if sm.is_empty() {
-            return;
+            return false;
         }
         let mut pending_sep = true;
+        let mut has_more = false;
         for item in sm.items.iter() {
             if item.separator {
                 pending_sep = true;
@@ -5621,7 +6141,8 @@ impl App {
             }
             // Klasik kabuk komutları (7-Zip, "Open with …", sürücü araçları) Windows 11'in
             // modern menüsünde görünmez; yalnızca "Daha fazla seçenek"te listelenir.
-            if !modern_shell_item(&item.label) {
+            if !full && !modern_shell_item(&item.label) {
+                has_more = true;
                 continue;
             }
             let mut n = menu::shell_node(item, ctx, &item.id.to_string());
@@ -5633,6 +6154,7 @@ impl App {
             m.nodes.push(n);
         }
         m.shell = Some(sm);
+        !full && has_more
     }
 
     /// Açık menüyü çizer ve seçilen komutu çalıştırır.
@@ -5668,15 +6190,16 @@ impl App {
             }
             Some(menu::Outcome::Command(Cmd::More)) => {
                 if let Some(st) = self.menu.take() {
-                    let (paths, background) = match st.target {
-                        MenuTarget::Items { paths, .. } => (paths, None),
-                        MenuTarget::Background { folder, .. } => (vec![], Some(folder)),
-                    };
-                    actions.push(Action::NativeMenu {
-                        paths,
-                        background,
-                        extended: false,
-                    });
+                    let pos = ctx.input(|i| i.pointer.latest_pos()).unwrap_or(st.menu.pos);
+                    // Önce Windows'un klasik menüsü; hiç açılmazsa aynı satırlar
+                    // uygulama içi menüde (filtresiz) gösterilir.
+                    if !self.show_native_menu(ctx, &st.target, false) {
+                        actions.push(Action::OpenMenu {
+                            target: st.target,
+                            pos,
+                            full: true,
+                        });
+                    }
                 }
             }
         }
@@ -6019,7 +6542,10 @@ fn handle_item_click(
         }
     }
     if NATIVE_MENU && resp.secondary_clicked() && shift {
-        actions.push(Action::ShellMenu { extended: true });
+        actions.push(Action::ShellMenu {
+            extended: true,
+            background: false,
+        });
     }
 }
 
@@ -6230,10 +6756,9 @@ impl App {
         if bg.secondary_clicked() {
             let pos = bg.interact_pointer_pos().unwrap_or_default();
             if NATIVE_MENU && ui.input(|i| i.modifiers.shift) {
-                actions.push(Action::NativeMenu {
-                    paths: vec![],
-                    background: Some(current.clone()),
+                actions.push(Action::ShellMenu {
                     extended: true,
+                    background: true,
                 });
             } else {
                 actions.push(Action::OpenMenu {
@@ -6242,6 +6767,7 @@ impl App {
                         in_search,
                     },
                     pos,
+                    full: false,
                 });
             }
         }
@@ -6793,6 +7319,7 @@ impl App {
                         actions.push(Action::OpenMenu {
                             target: menu_target_items(t, &e.path, e.is_dir, in_search),
                             pos,
+                            full: false,
                         });
                     }
                 });
@@ -7110,6 +7637,7 @@ impl App {
                             actions.push(Action::OpenMenu {
                                 target: menu_target_items(t, &e.path, e.is_dir, in_search),
                                 pos,
+                                full: false,
                             });
                         }
                     }
@@ -8104,6 +8632,92 @@ impl App {
                     self.toast(e, true);
                 }
             }
+            Dialog::BatchRename {
+                items,
+                pattern,
+                start,
+            } => {
+                let plan = batch_rename_plan(items, pattern, *start);
+                let mut run = false;
+                let mut cancel = false;
+                let resp = egui::Modal::new(egui::Id::new("batch_rename")).show(ctx, |ui| {
+                    ui.set_width(560.0);
+                    ui.heading(crate::i18n::t("Toplu yeniden adlandır"));
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        ui.label(crate::i18n::t("Ad kalıbı"));
+                        ui.add(
+                            egui::TextEdit::singleline(pattern)
+                                .desired_width(280.0)
+                                .hint_text("{name}"),
+                        );
+                        ui.label(crate::i18n::t("Başlangıç numarası"));
+                        ui.add(egui::DragValue::new(start).range(0..=999_999));
+                    });
+                    ui.label(
+                        RichText::new(crate::i18n::t(
+                            "{name} özgün ad, {n} sıra numarası, {date} tarih",
+                        ))
+                        .weak()
+                        .size(text_size(12.0)),
+                    );
+                    ui.add_space(8.0);
+                    match &plan {
+                        Ok(plan) => {
+                            ui.label(
+                                RichText::new(crate::i18n::tf(
+                                    "{} öğe yeniden adlandırılacak",
+                                    &[&plan.len()],
+                                ))
+                                .weak(),
+                            );
+                            egui::ScrollArea::vertical()
+                                .id_salt("batch_rename_preview")
+                                .max_height(260.0)
+                                .show(ui, |ui| {
+                                    for (from, to) in plan.iter().take(200) {
+                                        let old = from
+                                            .file_name()
+                                            .map(|n| n.to_string_lossy().into_owned())
+                                            .unwrap_or_default();
+                                        let new = to
+                                            .file_name()
+                                            .map(|n| n.to_string_lossy().into_owned())
+                                            .unwrap_or_default();
+                                        ui.label(format!("{old}  →  {new}"));
+                                    }
+                                });
+                        }
+                        Err(e) => {
+                            ui.label(
+                                RichText::new(e.clone()).color(Color32::from_rgb(196, 43, 28)),
+                            );
+                        }
+                    }
+                    ui.add_space(10.0);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.button(crate::i18n::t("Vazgeç")).clicked() {
+                            cancel = true;
+                        }
+                        let ready = plan.as_ref().is_ok_and(|p| !p.is_empty());
+                        let ok = ui.add_enabled(
+                            ready,
+                            egui::Button::new(crate::i18n::t("Yeniden adlandır"))
+                                .min_size(egui::vec2(140.0, 30.0)),
+                        );
+                        if ok.clicked() || (ready && ui.input(|i| i.key_pressed(Key::Enter))) {
+                            run = true;
+                        }
+                    });
+                });
+                if resp.should_close() || cancel {
+                    keep = false;
+                }
+                if run {
+                    self.apply_batch_rename(items, pattern, *start);
+                    keep = false;
+                }
+            }
             Dialog::Help => {
                 let resp = egui::Modal::new(egui::Id::new("help")).show(ctx, |ui| {
                     ui.set_width(560.0);
@@ -8243,6 +8857,11 @@ impl eframe::App for App {
     /// Akrilik buzlu cam istemci alanının altından görünsün diye arka planı saydam temizle.
     /// Cam kapalıysa tuval rengi (opak) kullanılır.
     fn clear_color(&self, visuals: &egui::Visuals) -> [f32; 4] {
+        if wallpaper_on() {
+            return pal_solid(visuals.dark_mode)
+                .canvas
+                .to_normalized_gamma_f32();
+        }
         if glass() {
             return [0.0, 0.0, 0.0, 0.0];
         }
@@ -8481,8 +9100,11 @@ impl eframe::App for App {
             }
         }
 
+        self.poll_wallpaper();
         self.handle_keys(ctx, &mut actions);
 
+        // Arka plan resmi varsa panellerden önce pencere zeminine çizilir.
+        self.draw_wallpaper(ctx);
         // Düzen: sekme şeridi, araç çubuğu kartı, solda gezinti bölmesi, altta durum çubuğu
         let pl = pal(ctx.style().visuals.dark_mode);
         // Sekme şeridi: üstte TAB_GAP kadar cam boşluk, sekmeler alta yaslı yüzer.

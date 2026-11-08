@@ -3,97 +3,109 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>StarFile Explorer v0.8.0 - A Rust File Manager</title>
-    <meta name="description" content="A Rust file manager for Windows and Linux that looks like Windows 11 File Explorer. Command palette, split view, batch rename, automatic updates.">
+    <title>StarFile Explorer — Free File Manager for Windows and Linux</title>
+    <meta name="description" content="StarFile Explorer is a free, open-source Windows and Linux file manager with an Explorer-inspired interface, command palette, split view, Quick Look, and batch rename.">
     <meta property="og:title" content="StarFile Explorer">
-    <meta property="og:description" content="Windows 11 File Explorer clone in Rust. Background threaded loading, command palette, split view, batch rename.">
+    <meta property="og:description" content="Free, open-source file manager for Windows and Linux with an Explorer-inspired interface, command palette, split view, Quick Look, and batch rename.">
     <meta property="og:type" content="website">
     <meta property="og:url" content="https://some-rao.github.io/starfile-explorer/">
-    <meta property="og:image" content="https://some-rao.github.io/starfile-explorer/large-icons.png">
+    <meta property="og:image" content="https://raw.githubusercontent.com/some-rao/starfile-explorer/main/docs/screenshots/screenshot1.png">
     <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:image" content="https://raw.githubusercontent.com/some-rao/starfile-explorer/main/docs/screenshots/screenshot1.png">
     <link rel="icon" href="https://raw.githubusercontent.com/some-rao/starfile-explorer/main/assets/icon.png">
     <script type="application/ld+json">
-    {"@context":"https://schema.org","@type":"SoftwareApplication","name":"StarFile Explorer","operatingSystem":"Windows 11, Windows 10, Linux","applicationCategory":"UtilitiesApplication","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"license":"https://opensource.org/licenses/MIT","downloadUrl":"https://github.com/some-rao/starfile-explorer/releases/latest","codeRepository":"https://github.com/some-rao/starfile-explorer"}
+    {"@context":"https://schema.org","@type":"SoftwareApplication","name":"StarFile Explorer","operatingSystem":"Windows, Linux","applicationCategory":"UtilitiesApplication","offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"license":"https://opensource.org/licenses/MIT","downloadUrl":"https://github.com/some-rao/starfile-explorer/releases/latest","codeRepository":"https://github.com/some-rao/starfile-explorer"}
     </script>
     <style>
-        :root { --bg: #f7f7f8; --fg: #1b1b1f; --muted: #5b5b66; --card: #ffffff; --line: #e3e3e8; --accent: #0067c0; --accent-fg: #fff; }
+        :root { --bg:#f7f7f8; --fg:#1b1b1f; --muted:#5b5b66; --card:#fff; --line:#e3e3e8; --accent:#0067c0; --accent-fg:#fff; }
         @media (prefers-color-scheme: dark) {
-          :root { --bg: #1c1c1c; --fg: #ececf0; --muted: #a4a4ad; --card: #262626; --line: #353535; --accent: #4cc2ff; --accent-fg: #002b45; }
+          :root { --bg:#1c1c1c; --fg:#ececf0; --muted:#a4a4ad; --card:#262626; --line:#353535; --accent:#4cc2ff; --accent-fg:#002b45; }
         }
         * { box-sizing: border-box; }
-        body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif; }
-        main { max-width: 980px; margin: 0 auto; padding: 48px 16px 64px; }
-        h1 { font-size: clamp(2.5rem, 5vw, 3rem); line-height: 1.1; margin: 0 0 12px; letter-spacing: -0.02em; background: linear-gradient(90deg, var(--accent), #00d4ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-        .lead { font-size: 1.2rem; color: var(--muted); max-width: 640px; margin: 0 0 28px; }
-        .brand { display: flex; align-items: center; gap: 16px; margin-bottom: 32px; }
-        .brand-icon { width: 64px; height: 64px; }
-        .buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 36px; }
-        .btn { display: inline-block; padding: 10px 18px; border-radius: 6px; text-decoration: none; font-weight: 600; border: 1px solid var(--line); color: var(--fg); background: var(--card); transition: transform 0.1s; }
-        .btn:hover { transform: translateY(-1px); }
-        .btn.primary { background: var(--accent); color: var(--accent-fg); border: none; }
-        .btn.success { background: #28a745; color: #fff; }
-        img.shot { width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--line); box-shadow: 0 8px 30px rgba(0,0,0,.18); display: block; }
-        h2 { font-size: 1.35rem; margin: 48px 0 12px; }
+        body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.55 "Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,sans-serif; }
+        main { max-width: 980px; margin: 0 auto; padding: 40px 16px 64px; }
+        h1 { font-size: clamp(2.2rem, 5vw, 3rem); line-height: 1.1; margin: 0 0 10px; letter-spacing: -0.02em; }
+        h2 { font-size: 1.25rem; margin: 36px 0 12px; }
+        .lead { font-size: 1.1rem; color: var(--muted); max-width: 720px; margin: 0 0 20px; }
+        .buttons { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 24px; }
+        .btn { display: inline-block; padding: 10px 16px; border-radius: 8px; text-decoration: none; font-weight: 600; border: 1px solid var(--line); color: var(--fg); background: var(--card); }
+        .btn.primary { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
+        .note { color: var(--muted); font-size: .95rem; }
         ul { padding-left: 1.2em; margin: 0; }
         li { margin: 6px 0; }
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 16px; }
-        .grid img { width: 100%; height: auto; border-radius: 6px; border: 1px solid var(--line); box-shadow: 0 4px 12px rgba(0,0,0,.08); transition: transform 0.2s; }
-        .grid img:hover { transform: scale(1.02); }
-        pre { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow-x: auto; font-size: 0.9rem; }
-        code { font-family: "Cascadia Code", Consolas, monospace; }
-        footer { margin-top: 48px; color: var(--muted); font-size: 0.9rem; }
-        .credit { color: var(--muted); }
-        .credit a { color: var(--accent); }
-        .version { font-size: 0.8rem; color: var(--muted); }
+        code, pre { font-family: "Cascadia Code", Consolas, ui-monospace, monospace; }
+        pre { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; overflow-x: auto; }
+        .gallery { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 14px; margin-top: 14px; }
+        figure { margin: 0; }
+        .gallery img, .hero img { width: 100%; height: auto; display: block; border-radius: 10px; border: 1px solid var(--line); background: var(--card); }
+        figcaption { color: var(--muted); font-size: .9rem; margin-top: 6px; }
+        .hero { margin: 10px 0 6px; }
+        footer { margin-top: 44px; color: var(--muted); font-size: .92rem; }
+        a { color: var(--accent); }
     </style>
 </head>
 <body>
     <main>
-        <div class="brand">
-            <svg class="brand-icon" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <path d="M35 65L50 35L65 65H35Z" fill="#00d4ff"/>
-                <circle cx="50" cy="50" r="8" fill="#fff"/>
-                <path d="M50 25L55 40H70L58 50L62 65L50 55L38 65L42 50L30 40H45L50 25Z" fill="#fff"/>
-            </svg>
-            <div>
-                <h1>StarFile Explorer<span class="version">v0.8.0</span></h1>
-                <p class="lead">A Rust file manager for Windows and Linux that looks like Windows 11 File Explorer. Command palette, split view, batch rename, automatic updates.</p>
-            </div>
-        </div>
+        <h1>StarFile Explorer</h1>
+        <p class="lead">A free, open-source file manager for <strong>Windows and Linux</strong> with an Explorer-inspired interface. Built in Rust with egui/eframe.</p>
 
         <div class="buttons">
-            <a class="btn primary" href="https://github.com/some-rao/starfile-explorer/releases/tag/v0.8.0">📥 Download v0.8.0</a>
-            <a class="btn" href="https://github.com/some-rao/starfile-explorer">📝 Source Code</a>
+            <a class="btn primary" href="https://github.com/some-rao/starfile-explorer/releases/latest">Download latest release</a>
+            <a class="btn" href="https://github.com/some-rao/starfile-explorer">Source code</a>
         </div>
+        <p class="note">Use the latest GitHub release assets; version numbers change over time. Windows release downloads are verified with SHA-256 before the app applies an update.</p>
 
-        <img class="shot" src="large-icons.png" alt="StarFile Explorer showing a Downloads folder with large icons, grouped by date" width="1920" height="1020">
+        <figure class="hero">
+            <a href="screenshots/screenshot1.png"><img src="screenshots/screenshot1.png" alt="StarFile Explorer main interface" width="1280" loading="eager"></a>
+            <figcaption>Main interface (release screenshot).</figcaption>
+        </figure>
 
-        <h2>Same Windows 11 Explorer experience</h2>
+        <h2>Screenshots</h2>
+        <div class="gallery">
+            <figure>
+                <a href="screenshots/screenshot1.png"><img src="screenshots/screenshot1.png" alt="StarFile Explorer main interface showing the file manager layout" loading="lazy"></a>
+                <figcaption>Main interface</figcaption>
+            </figure>
+            <figure>
+                <a href="screenshots/screenshot2.png"><img src="screenshots/screenshot2.png" alt="StarFile Explorer command palette" loading="lazy"></a>
+                <figcaption>Command palette</figcaption>
+            </figure>
+            <figure>
+                <a href="screenshots/screenshot3.png"><img src="screenshots/screenshot3.png" alt="StarFile Explorer Quick Look preview" loading="lazy"></a>
+                <figcaption>Quick Look preview</figcaption>
+            </figure>
+        </div>
+        <p class="note">The gallery is limited to screenshots with clear StarFile Explorer provenance from this repository’s release/docs history.</p>
+
+        <h2>Features</h2>
         <ul>
-            <li>Tabs in the title bar, one toolbar card with the address bar, a navigation pane, Home and This PC pages.</li>
-            <li>Every File Explorer shortcut works the same way. F1 lists them.</li>
-            <li>Folders are read on background threads, so folders with 100k+ files don't freeze.</li>
-            <li><code>Ctrl+Shift+P</code> Command palette: searches files, runs commands, jumps to paths.</li>
-            <li><code>Ctrl+Shift+S</code> Split view: browse two folders side by side.</li>
-            <li><code>Space</code> Quick Look: inline preview for images, PDFs, text, Markdown, audio, video.</li>
-            <li>Batch rename with patterns: <code>{name} {n}</code>, <code>{date}</code>.</li>
-            <li>Zip support: extract and create archives from context menu.</li>
-            <li>Multiple themes: System, Light, Dark, Catppuccin, Gruvbox, Nord, Dracula, Tokyo Night.</li>
+            <li><strong>Explorer-inspired workflow:</strong> tabs, toolbar/address bar, navigation pane, Home/This PC pages, and multiple view modes.</li>
+            <li><strong>Command palette:</strong> <code>Ctrl+K</code> (also <code>Ctrl+E</code>, <code>Ctrl+F</code>, <code>F3</code>) to search files, run commands, and jump to paths.</li>
+            <li><strong>Split view:</strong> <code>Ctrl+\</code> to browse two folders side by side.</li>
+            <li><strong>Quick Look:</strong> <code>Space</code> to preview selected items. Embedded PDF/media/HTML playback uses a WebView2-based viewer where available on Windows; behavior depends on the local Windows/WebView2 setup.</li>
+            <li><strong>Batch rename:</strong> rename multiple selected items with patterns (<code>{name}</code>, <code>{n}</code>, <code>{date}</code>), live preview, collision checks, and undo.</li>
+            <li><strong>Background work:</strong> folder loading, search, and file jobs run off the UI thread to reduce freezes.</li>
+            <li><strong>Recycle Bin integration (Windows):</strong> delete to Recycle Bin with undo for supported operations.</li>
+            <li><strong>Git status column:</strong> shows repository state when enabled.</li>
+            <li><strong>Custom wallpaper:</strong> optional background image behind translucent panels.</li>
+            <li><strong>New-file templates:</strong> create documents/templates from the New menu, including an empty <code>.zip</code> archive. On Windows, installed shell extensions may add their own archive or context-menu actions.</li>
         </ul>
 
-        <div class="grid">
-            <img src="details.png" alt="Details view with file columns" loading="lazy">
-            <img src="this-pc.png" alt="This PC page showing drives" loading="lazy">
-            <img src="light.png" alt="Light theme interface" loading="lazy">
-        </div>
+        <h2>Windows and Linux differences</h2>
+        <ul>
+            <li><strong>Windows:</strong> uses Win32 shell integration for icons/thumbnails, native/extended context menus, OLE drag-out, clipboard file operations, properties, and other Explorer-style features.</li>
+            <li><strong>Linux:</strong> uses freedesktop/XDG integrations (desktop theme icons, app integration, D-Bus/file-manager behavior, project properties/dialog behavior) and does not provide the same Windows shell extension behavior.</li>
+        </ul>
 
         <h2>Install</h2>
-        <p><strong>Windows:</strong> Download <code>StarFile-Setup.exe</code> from <a href="https://github.com/some-rao/starfile-explorer/releases/tag/v0.8.0">Releases</a>.</p>
+        <p><strong>Windows:</strong> download <code>StarFile-Setup.exe</code> (per-user installer) or the portable <code>StarFile.exe</code> from the <a href="https://github.com/some-rao/starfile-explorer/releases/latest">latest release</a>.</p>
         <p><strong>Linux:</strong></p>
         <pre><code>curl -fsSL https://raw.githubusercontent.com/some-rao/starfile-explorer/main/install.sh | sh</code></pre>
+        <p class="note">Linux release artifacts include x86_64 downloads; Flatpak bundles are also produced by release CI.</p>
 
         <footer>
-            <p class="credit">Based on <a href="https://github.com/misutesu-desu/swift-explorer">Swift Explorer</a> by misutesu-desu. Relaunched as <strong>StarFile Explorer</strong> (MIT licensed).</p>
+            <p>StarFile Explorer is free and open source (<a href="https://github.com/some-rao/starfile-explorer/blob/main/LICENSE">MIT</a>). Based on <a href="https://github.com/misutesu-desu/swift-explorer">Swift Explorer</a> by misutesu-desu.</p>
+            <p><a href="https://github.com/some-rao/starfile-explorer/releases/latest">Latest release</a> · <a href="https://github.com/some-rao/starfile-explorer">Repository</a></p>
         </footer>
     </main>
 </body>

@@ -28,27 +28,28 @@ use windows::Win32::System::Ole::{
 };
 use windows::Win32::System::SystemServices::{MK_LBUTTON, MODIFIERKEYS_FLAGS};
 use windows::Win32::System::Threading::GetCurrentThreadId;
-use windows::Win32::UI::Shell::Common::ITEMIDLIST;
+use windows::Win32::UI::Shell::Common::{COMDLG_FILTERSPEC, ITEMIDLIST};
 use windows::Win32::UI::Shell::{
     BHID_DataObject, BHID_SFUIObject, DefSubclassProc, IContextMenu, IContextMenu2, IContextMenu3,
     IFileOpenDialog, IShellFolder, IShellItem, IShellItemArray, IShellItemImageFactory,
     RemoveWindowSubclass, SHCreateItemFromParsingName, SHCreateShellItemArrayFromIDLists,
     SHGetFileInfoW, SHParseDisplayName, SetWindowSubclass, CMF_CANRENAME, CMF_EXTENDEDVERBS,
-    CMF_NORMAL, CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX, FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS,
-    GCS_VERBW, SHFILEINFOW, SHGFI_TYPENAME, SHGFI_USEFILEATTRIBUTES, SIGDN_FILESYSPATH, SIIGBF,
-    SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY, SIIGBF_THUMBNAILONLY,
+    CMF_NORMAL, CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM,
+    FOS_PICKFOLDERS, GCS_VERBW, SHFILEINFOW, SHGFI_TYPENAME, SHGFI_USEFILEATTRIBUTES,
+    SIGDN_FILESYSPATH, SIIGBF, SIIGBF_BIGGERSIZEOK, SIIGBF_ICONONLY, SIIGBF_THUMBNAILONLY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreatePopupMenu, DestroyMenu, GetAncestor, GetCursorPos, GetMenuItemCount,
-    GetMenuItemInfoW, GetMenuStringW, GetWindowRect, IsZoomed, SendMessageW, SetWindowsHookExW,
-    TrackPopupMenuEx, UnhookWindowsHookEx, WindowFromPoint, CBT_CREATEWNDW, GA_ROOT,
-    HCBT_CREATEWND, HHOOK, HMENU, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCLIENT, HTLEFT, HTRIGHT,
-    HTTOP, HTTOPLEFT, HTTOPRIGHT, MENUITEMINFOW, MENU_ITEM_MASK, MFS_CHECKED, MFS_DISABLED,
-    MFT_SEPARATOR, MF_BYCOMMAND, MIIM_BITMAP, MIIM_FTYPE, MIIM_ID, MIIM_STATE, MIIM_STRING,
-    MIIM_SUBMENU, MINMAXINFO, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE, SW_SHOWNORMAL, TPM_RETURNCMD,
-    TPM_RIGHTBUTTON, WH_CBT, WM_CREATE, WM_DRAWITEM, WM_GETMINMAXINFO, WM_INITMENUPOPUP,
-    WM_MEASUREITEM, WM_MENUCHAR, WM_MENUSELECT, WM_NCCALCSIZE, WM_NCHITTEST, WM_SETTINGCHANGE,
-    WM_SHOWWINDOW, WM_SYSCOMMAND, WM_THEMECHANGED, WS_CHILD,
+    GetMenuItemInfoW, GetMenuStringW, GetWindowRect, IsZoomed, PostMessageW, SendMessageW,
+    SetForegroundWindow, SetWindowsHookExW, TrackPopupMenuEx, UnhookWindowsHookEx, WindowFromPoint,
+    CBT_CREATEWNDW, GA_ROOT, HCBT_CREATEWND, HHOOK, HMENU, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT,
+    HTCLIENT, HTLEFT, HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, MENUITEMINFOW, MENU_ITEM_MASK,
+    MFS_CHECKED, MFS_DISABLED, MFT_SEPARATOR, MF_BYCOMMAND, MIIM_BITMAP, MIIM_FTYPE, MIIM_ID,
+    MIIM_STATE, MIIM_STRING, MIIM_SUBMENU, MINMAXINFO, SC_MAXIMIZE, SC_MINIMIZE, SC_RESTORE,
+    SW_SHOWNORMAL, TPM_RETURNCMD, TPM_RIGHTBUTTON, WH_CBT, WM_CREATE, WM_DRAWITEM,
+    WM_GETMINMAXINFO, WM_INITMENUPOPUP, WM_MEASUREITEM, WM_MENUCHAR, WM_MENUSELECT, WM_NCCALCSIZE,
+    WM_NCHITTEST, WM_NULL, WM_SETTINGCHANGE, WM_SHOWWINDOW, WM_SYSCOMMAND, WM_THEMECHANGED,
+    WS_CHILD,
 };
 
 pub use crate::images::{ImageCache, Img};
@@ -556,6 +557,9 @@ unsafe fn run_native(cm: &IContextMenu, menu: HMENU, hwnd: HWND) -> MenuResult {
     let mut pt = POINT::default();
     let _ = GetCursorPos(&mut pt);
     ACTIVE_MENU.with(|m| *m.borrow_mut() = Some(cm.clone()));
+    // TrackPopupMenuEx can dismiss immediately when its owner is not foreground.
+    // This occurs when the menu is opened from the app's custom egui context menu.
+    let _ = SetForegroundWindow(hwnd);
     let cmd = TrackPopupMenuEx(
         menu,
         (TPM_RETURNCMD | TPM_RIGHTBUTTON).0,
@@ -565,6 +569,8 @@ unsafe fn run_native(cm: &IContextMenu, menu: HMENU, hwnd: HWND) -> MenuResult {
         None,
     );
     ACTIVE_MENU.with(|m| *m.borrow_mut() = None);
+    // Required by Windows to complete foreground activation for popup menus.
+    let _ = PostMessageW(hwnd, WM_NULL, WPARAM(0), LPARAM(0));
     let _ = DestroyMenu(menu);
     if cmd.0 <= 0 {
         return MenuResult::None;
@@ -1036,6 +1042,59 @@ pub fn pick_folder(owner: isize, start: Option<&Path>) -> Option<PathBuf> {
         let mut opts = dialog.GetOptions().unwrap_or_default();
         opts |= FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM;
         let _ = dialog.SetOptions(opts);
+        if let Some(p) = start {
+            if let Ok(folder) = SHCreateItemFromParsingName::<_, _, IShellItem>(&hs(p), None) {
+                let _ = dialog.SetFolder(&folder);
+            }
+        }
+        let hwnd = if owner == 0 {
+            HWND::default()
+        } else {
+            HWND(owner as *mut c_void)
+        };
+        if dialog.Show(hwnd).is_err() {
+            return None;
+        }
+        let item = dialog.GetResult().ok()?;
+        let name = item.GetDisplayName(SIGDN_FILESYSPATH).ok()?;
+        let out = name.to_string().ok();
+        CoTaskMemFree(Some(name.0 as *const c_void));
+        out.filter(|s| !s.is_empty()).map(PathBuf::from)
+    }
+}
+
+/// Yerel "dosya seç" iletişim kutusu (IFileOpenDialog + FOS_FILEMUSTEXIST).
+/// `filter_name` görünen ad, `filter_spec` ise noktalı virgülle ayrılmış kalıplardır
+/// (ör. `"*.png;*.jpg"`). İptal edilirse `None` döner.
+pub fn pick_file(
+    owner: isize,
+    start: Option<&Path>,
+    filter_name: &str,
+    filter_spec: &str,
+) -> Option<PathBuf> {
+    const CLSID_FILE_OPEN_DIALOG: windows::core::GUID =
+        windows::core::GUID::from_u128(0xDC1C5A9C_E88A_4DDE_A5A1_60F82A20AEF7);
+    // COMDLG_FILTERSPEC işaretçileri çağrı boyunca geçerli kalmalı.
+    let name: Vec<u16> = filter_name
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let spec: Vec<u16> = filter_spec
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let filter = COMDLG_FILTERSPEC {
+        pszName: PCWSTR(name.as_ptr()),
+        pszSpec: PCWSTR(spec.as_ptr()),
+    };
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+        let dialog: IFileOpenDialog =
+            CoCreateInstance(&CLSID_FILE_OPEN_DIALOG, None, CLSCTX_ALL).ok()?;
+        let mut opts = dialog.GetOptions().unwrap_or_default();
+        opts |= FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST;
+        let _ = dialog.SetOptions(opts);
+        let _ = dialog.SetFileTypes(&[filter]);
         if let Some(p) = start {
             if let Ok(folder) = SHCreateItemFromParsingName::<_, _, IShellItem>(&hs(p), None) {
                 let _ = dialog.SetFolder(&folder);
