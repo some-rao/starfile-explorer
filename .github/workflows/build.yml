@@ -38,7 +38,8 @@ jobs:
           choco install innosetup --no-progress -y
           $ver = if ($env:GITHUB_REF_TYPE -eq 'tag') { $env:GITHUB_REF_NAME -replace '^v','' } else { (Select-String -Path Cargo.toml -Pattern '^version = "([^"]+)"').Matches.Groups[1].Value }
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=$ver" "packaging\windows\starfile.iss"
-          Copy-Item "dist\StarFile-Setup-$ver.exe" "StarFile-Setup.exe"
+          # Publish one stable installer name (avoid duplicate versioned+unversioned assets)
+          Copy-Item "dist\StarFile-Setup-$ver.exe" "StarFile-Setup.exe" -Force
       - name: Package tar.gz
         if: runner.os == 'Linux'
         run: |
@@ -61,6 +62,8 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          # Windows: StarFile.exe (portable, used by in-app updater/latest.json)
+          # Linux: starfile-linux-x86_64*
           files: ${{ matrix.asset }}*
       - name: Attach installer to release
         if: startsWith(github.ref, 'refs/tags/v') && runner.os == 'Windows'
